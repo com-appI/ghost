@@ -84,6 +84,32 @@
       </footer>
     </main>
   </div>
+  <section class="auth-overlay hidden" id="authOverlay" aria-modal="true" role="dialog" aria-labelledby="authTitle">
+    <div class="auth-card">
+      <button class="auth-close" id="authClose" type="button" aria-label="Закрыть">×</button>
+      <div class="auth-mark">✧</div>
+      <p class="auth-eyebrow">GHOST AI ACCOUNT</p>
+      <h2 id="authTitle">С возвращением</h2>
+      <p class="auth-subtitle" id="authSubtitle">Войдите, чтобы продолжить общение с Ghost AI.</p>
+      <div class="auth-tabs" role="tablist" aria-label="Тип аккаунта">
+        <button class="auth-tab active" id="loginTab" type="button" role="tab" aria-selected="true">Вход</button>
+        <button class="auth-tab" id="registerTab" type="button" role="tab" aria-selected="false">Регистрация</button>
+      </div>
+      <form id="authForm" class="auth-form">
+        <label for="authName" id="authNameLabel" class="hidden">Имя</label>
+        <input id="authName" class="auth-input hidden" type="text" autocomplete="name" placeholder="Как вас зовут" maxlength="60">
+        <label for="authEmail">Электронная почта</label>
+        <input id="authEmail" class="auth-input" type="email" autocomplete="email" placeholder="name@example.com" required>
+        <label for="authPassword">Пароль</label>
+        <input id="authPassword" class="auth-input" type="password" autocomplete="current-password" placeholder="Не менее 6 символов" minlength="6" required>
+        <button class="auth-submit" id="authSubmit" type="submit">Войти</button>
+      </form>
+      <button class="auth-google" id="authGoogle" type="button"><span class="google-g">G</span> Продолжить с Google</button>
+      <button class="auth-forgot" id="authForgot" type="button">Забыли пароль?</button>
+      <p class="auth-error" id="authError" role="alert" aria-live="polite"></p>
+      <p class="auth-legal">Продолжая, вы соглашаетесь использовать Ghost AI в соответствии с правилами сервиса.</p>
+    </div>
+  </section>
   <div class="toast" id="toast" role="status"></div>
 </body>
 </html>

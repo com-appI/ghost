@@ -14,11 +14,20 @@ favicon.svg и _worker.js. Загружай ZIP целиком, не исход�
    - FIREBASE_PROJECT_ID — Variable: toypsig-2953f
    При желании добавь RATE_LIMIT_REQUESTS=20.
    После изменения секретов создай новый deployment.
-4. В Firebase Console → Authentication → Settings → Authorized domains
-   добавь точный адрес своего сайта вида имя-проекта.pages.dev.
-   Убедись, что провайдер Google включён.
-5. В Firebase Console → Firestore → Rules вставь содержимое файла firestore.rules
+4. В Firebase Console → Authentication → Sign-in method включи ДВА способа:
+   - Email/Password — для обычной регистрации и входа по почте и паролю.
+   - Google — для входа через Google.
+5. В Firebase Console → Authentication → Settings → Authorized domains
+   добавь точный адрес сайта вида имя-проекта.pages.dev.
+   Без этого Firebase может вернуть auth/unauthorized-domain.
+6. В Firebase Console → Firestore → Rules вставь содержимое файла firestore.rules
    из этого ZIP и опубликуй правила.
+
+Регистрация и вход:
+На сайте нажми «Войти» → выбери вкладку «Регистрация» для нового аккаунта.
+Можно зарегистрироваться по имени, почте и паролю либо нажать «Продолжить с Google».
+Для уже созданного аккаунта выбери вкладку «Вход». «Забыли пароль?» отправит
+письмо для сброса пароля на указанную почту.
 
 Проверка:
 Открой https://ИМЯ-ПРОЕКТА.pages.dev/api/health

@@ -14,7 +14,8 @@
     createdAt: null,
     loading: false,
     controller: null,
-    toastTimer: null
+    toastTimer: null,
+    authMode: 'login'
   };
 
   const els = {
@@ -24,7 +25,11 @@
     userName: $('userName'), userEmail: $('userEmail'), avatar: $('avatar'),
     welcome: $('welcome'), messages: $('messages'), signinHint: $('signinHint'),
     composerForm: $('composerForm'), messageInput: $('messageInput'), sendBtn: $('sendBtn'),
-    stopBtn: $('stopBtn'), toast: $('toast')
+    stopBtn: $('stopBtn'), toast: $('toast'), authOverlay: $('authOverlay'), authClose: $('authClose'),
+    authForm: $('authForm'), authName: $('authName'), authNameLabel: $('authNameLabel'),
+    authEmail: $('authEmail'), authPassword: $('authPassword'), authSubmit: $('authSubmit'),
+    authGoogle: $('authGoogle'), authForgot: $('authForgot'), authError: $('authError'),
+    authTitle: $('authTitle'), authSubtitle: $('authSubtitle'), loginTab: $('loginTab'), registerTab: $('registerTab')
   };
 
   function toast(message) {
@@ -92,7 +97,7 @@
     } else {
       els.avatar.style.backgroundImage = '';
     }
-    els.signinHint.textContent = signedIn ? 'Готово. Напишите сообщение ниже.' : 'Чтобы начать, войдите через Google.';
+    els.signinHint.textContent = signedIn ? 'Готово. Напишите сообщение ниже.' : 'Войдите или создайте аккаунт, чтобы начать.';
   }
 
   function newChat() {
@@ -184,23 +189,119 @@
     }
   }
 
-  async function signIn() {
-    if (!state.auth) return toast('Firebase не настроен. Проверьте public/config.js.');
+  function openAuth(mode = 'login') {
+    if (!state.auth) {
+      toast('Firebase не загрузился. Проверьте настройки проекта.');
+      return;
+    }
+    setAuthMode(mode);
+    els.authOverlay.classList.remove('hidden');
+    document.body.classList.add('auth-open');
+    setTimeout(() => (mode === 'register' ? els.authName : els.authEmail).focus(), 30);
+  }
+
+  function closeAuth() {
+    els.authOverlay.classList.add('hidden');
+    document.body.classList.remove('auth-open');
+    els.authError.textContent = '';
+  }
+
+  function setAuthMode(mode) {
+    state.authMode = mode;
+    const registering = mode === 'register';
+    els.authTitle.textContent = registering ? 'Создать аккаунт' : 'С возвращением';
+    els.authSubtitle.textContent = registering ? 'Зарегистрируйтесь, чтобы сохранять свои чаты.' : 'Войдите, чтобы продолжить общение с Ghost AI.';
+    els.authName.classList.toggle('hidden', !registering);
+    els.authNameLabel.classList.toggle('hidden', !registering);
+    els.authName.required = registering;
+    els.authPassword.autocomplete = registering ? 'new-password' : 'current-password';
+    els.authSubmit.textContent = registering ? 'Создать аккаунт' : 'Войти';
+    els.authForgot.classList.toggle('hidden', registering);
+    els.loginTab.classList.toggle('active', !registering);
+    els.registerTab.classList.toggle('active', registering);
+    els.loginTab.setAttribute('aria-selected', String(!registering));
+    els.registerTab.setAttribute('aria-selected', String(registering));
+    els.authError.textContent = '';
+  }
+
+  function authErrorMessage(error) {
+    const messages = {
+      'auth/invalid-email': 'Проверьте правильность адреса электронной почты.',
+      'auth/user-not-found': 'Аккаунт с такой почтой не найден. Зарегистрируйтесь.',
+      'auth/wrong-password': 'Неверный пароль. Попробуйте ещё раз.',
+      'auth/invalid-credential': 'Неверная почта или пароль.',
+      'auth/email-already-in-use': 'Эта почта уже зарегистрирована. Перейдите во вкладку «Вход».',
+      'auth/weak-password': 'Пароль слишком простой. Используйте не менее 6 символов.',
+      'auth/too-many-requests': 'Слишком много попыток. Попробуйте позже.',
+      'auth/network-request-failed': 'Нет соединения. Проверьте интернет.',
+      'auth/operation-not-allowed': 'Этот способ входа не включён в Firebase Authentication.',
+      'auth/unauthorized-domain': 'Домен сайта не добавлен в Firebase → Authentication → Settings → Authorized domains.',
+      'auth/popup-closed-by-user': 'Окно входа закрыто. Попробуйте ещё раз.'
+    };
+    return messages[error?.code] || `Не удалось выполнить вход (${error?.code || 'unknown'}). Проверьте настройки Firebase.`;
+  }
+
+  async function signInWithGoogle() {
+    if (!state.auth) return openAuth('login');
     const provider = new firebase.auth.GoogleAuthProvider();
     provider.setCustomParameters({ prompt: 'select_account' });
     provider.addScope('email');
     provider.addScope('profile');
-    const mobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || '');
     try {
-      if (mobile) await state.auth.signInWithRedirect(provider);
-      else await state.auth.signInWithPopup(provider);
+      const result = await state.auth.signInWithPopup(provider);
+      if (result.user) closeAuth();
     } catch (error) {
-      if (error.code === 'auth/popup-blocked' || error.code === 'auth/cancelled-popup-request') {
-        await state.auth.signInWithRedirect(provider);
-      } else {
-        console.error('Google sign-in:', error.code || error.message);
-        toast('Не удалось войти через Google. Проверьте настройки Firebase.');
+      if (error.code === 'auth/popup-blocked' || error.code === 'auth/cancelled-popup-request' || error.code === 'auth/operation-not-supported-in-this-environment') {
+        try { await state.auth.signInWithRedirect(provider); return; }
+        catch (redirectError) { error = redirectError; }
       }
+      console.error('Google sign-in:', error.code || error.message);
+      els.authError.textContent = authErrorMessage(error);
+    }
+  }
+
+  async function submitAuth(event) {
+    event.preventDefault();
+    if (!state.auth) return;
+    const email = els.authEmail.value.trim();
+    const password = els.authPassword.value;
+    const registering = state.authMode === 'register';
+    els.authSubmit.disabled = true;
+    els.authSubmit.textContent = registering ? 'Создаём аккаунт…' : 'Входим…';
+    els.authError.textContent = '';
+    try {
+      if (registering) {
+        const name = els.authName.value.trim();
+        const result = await state.auth.createUserWithEmailAndPassword(email, password);
+        if (name) await result.user.updateProfile({ displayName: name });
+        closeAuth();
+        toast('Аккаунт создан. Добро пожаловать в Ghost AI!');
+      } else {
+        await state.auth.signInWithEmailAndPassword(email, password);
+        closeAuth();
+        toast('Вы вошли в Ghost AI.');
+      }
+    } catch (error) {
+      console.error('Email authentication:', error.code || error.message);
+      els.authError.textContent = authErrorMessage(error);
+    } finally {
+      els.authSubmit.disabled = false;
+      els.authSubmit.textContent = registering ? 'Создать аккаунт' : 'Войти';
+    }
+  }
+
+  async function resetPassword() {
+    const email = els.authEmail.value.trim();
+    if (!email) {
+      els.authError.textContent = 'Сначала введите свою электронную почту.';
+      els.authEmail.focus();
+      return;
+    }
+    try {
+      await state.auth.sendPasswordResetEmail(email);
+      els.authError.textContent = 'Письмо для сброса пароля отправлено. Проверьте почту.';
+    } catch (error) {
+      els.authError.textContent = authErrorMessage(error);
     }
   }
 
@@ -234,8 +335,8 @@
   async function sendMessage(text) {
     if (!text || state.loading) return;
     if (!state.user) {
-      toast('Сначала войдите через Google.');
-      return signIn();
+      toast('Сначала войдите в Ghost AI.');
+      return openAuth('login');
     }
     if (!state.activeChatId) state.activeChatId = crypto.randomUUID();
     state.messages.push({ role: 'user', content: text });
@@ -350,7 +451,15 @@
     }
   }
 
-  els.signInBtn.addEventListener('click', signIn);
+  els.signInBtn.addEventListener('click', () => openAuth('login'));
+  els.authClose.addEventListener('click', closeAuth);
+  els.authOverlay.addEventListener('click', (event) => { if (event.target === els.authOverlay) closeAuth(); });
+  els.loginTab.addEventListener('click', () => setAuthMode('login'));
+  els.registerTab.addEventListener('click', () => setAuthMode('register'));
+  els.authForm.addEventListener('submit', submitAuth);
+  els.authGoogle.addEventListener('click', signInWithGoogle);
+  els.authForgot.addEventListener('click', resetPassword);
+  document.addEventListener('keydown', (event) => { if (event.key === 'Escape') closeAuth(); });
   els.signOutBtn.addEventListener('click', async () => {
     try { await state.auth.signOut(); newChat(); toast('Вы вышли из аккаунта.'); }
     catch { toast('Не удалось выйти из аккаунта.'); }
