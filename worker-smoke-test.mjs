@@ -1,5 +1,10 @@
-import worker from "./_worker.mjs";
+import { readFile } from "node:fs/promises";
 import assert from "node:assert/strict";
+
+// Load Cloudflare's _worker.js as an ES module without requiring a package.json.
+const workerSource = await readFile(new URL("./_worker.js", import.meta.url), "utf8");
+const workerUrl = `data:text/javascript;base64,${Buffer.from(workerSource).toString("base64")}`;
+const { default: worker } = await import(workerUrl);
 
 const assets = { fetch: async () => new Response("Ghost AI UI", { status: 200 }) };
 let response = await worker.fetch(new Request("https://ghost.example/api/health"), {

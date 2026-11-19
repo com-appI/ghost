@@ -236,6 +236,7 @@
       'auth/network-request-failed': 'Нет соединения. Проверьте интернет.',
       'auth/operation-not-allowed': 'Этот способ входа не включён в Firebase Authentication.',
       'auth/unauthorized-domain': 'Домен сайта не добавлен в Firebase → Authentication → Settings → Authorized domains.',
+      'auth/api-key-not-valid': 'Firebase API-ключ в config.js неверный. Проверьте, что опубликован последний ZIP с исправленным config.js.',
       'auth/popup-closed-by-user': 'Окно входа закрыто. Попробуйте ещё раз.'
     };
     return messages[error?.code] || `Не удалось выполнить вход (${error?.code || 'unknown'}). Проверьте настройки Firebase.`;

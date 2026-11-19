@@ -2,11 +2,10 @@
    apiKey below is Firebase's browser project identifier, not the NVIDIA secret.
    NVIDIA_API_KEY must only exist in the server's environment. */
 window.GHOST_CONFIG = {
-  // Empty = use the same origin (recommended when the whole app runs on Render).
-  // For Cloudflare Pages frontend + Render backend, put the Render URL here.
+  // Empty = use this Cloudflare Pages origin for both the app and its Worker API.
   apiBaseUrl: '',
   firebase: {
-    apiKey: 'AIzaSyD_s04xTQMdTI2PMmdXJvvOy9S5P4zfTuA',
+    apiKey: 'AIzaSyD_s04tXQMdTI2PMmdXJvvOy9S5P4zfTuA',
     authDomain: 'toypsig-2953f.firebaseapp.com',
     projectId: 'toypsig-2953f',
     storageBucket: 'toypsig-2953f.firebasestorage.app',
