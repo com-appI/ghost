@@ -1,110 +1,270 @@
 <!DOCTYPE html>
 <html lang="ru">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Проверка моделей NVIDIA NIM</title>
-    <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0a0e1a; color: #e2e8f0; padding: 20px; box-sizing: border-box; }
-        .card { max-width: 800px; margin: 0 auto; background: #12182a; border-radius: 12px; padding: 24px; border: 1px solid #1f2a44; }
-        h1 { font-size: 20px; color: #76b900; margin-top: 0; }
-        label { display: block; font-size: 13px; color: #94a3b8; margin-bottom: 6px; margin-top: 18px; }
-        input { width: 100%; padding: 12px 14px; background: #0a0e1a; border: 1px solid #2a3550; border-radius: 8px; color: #e2e8f0; font-size: 14px; font-family: monospace; box-sizing: border-box; }
-        input:focus { outline: none; border-color: #76b900; }
-        button { width: 100%; padding: 14px; margin-top: 20px; background: #76b900; color: #0a0e1a; border: none; border-radius: 8px; font-size: 15px; font-weight: 700; cursor: pointer; }
-        button:hover { background: #8fd400; }
-        button:disabled { opacity: 0.5; cursor: not-allowed; }
-        #status { margin-top: 20px; padding: 14px; border-radius: 8px; font-size: 14px; display: none; }
-        #status.ok { background: #064e3b; border: 1px solid #10b981; color: #a7f3d0; display: block; }
-        #status.err { background: #450a0a; border: 1px solid #ef4444; color: #fecaca; display: block; }
-        #status.loading { background: #1e3a5f; border: 1px solid #3b82f6; color: #bfdbfe; display: block; }
-        #modelList { margin-top: 16px; max-height: 400px; overflow-y: auto; background: #0a0e1a; border-radius: 8px; padding: 12px; font-family: monospace; font-size: 13px; line-height: 1.8; display: none; }
-        .model-item { padding: 4px 0; border-bottom: 1px solid #1f2a44; }
-        .model-item:last-child { border-bottom: none; }
-        .model-id { color: #76b900; }
-        .model-owner { color: #64748b; font-size: 11px; }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NVIDIA NIM Chat — Nemotron 3 Ultra</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #0a0e1a;
+    color: #e2e8f0;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+  header {
+    background: #12182a;
+    padding: 12px 16px;
+    border-bottom: 1px solid #1f2a44;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+  }
+  header h1 { font-size: 16px; color: #76b900; margin-right: auto; }
+  header input, header select {
+    padding: 6px 10px;
+    background: #0a0e1a;
+    border: 1px solid #2a3550;
+    border-radius: 6px;
+    color: #e2e8f0;
+    font-size: 12px;
+    font-family: monospace;
+  }
+  header input { width: 260px; }
+  header select { max-width: 320px; }
+  header button {
+    padding: 6px 12px;
+    background: #76b900;
+    color: #0a0e1a;
+    border: none;
+    border-radius: 6px;
+    font-weight: 600;
+    cursor: pointer;
+    font-size: 12px;
+  }
+  header button:hover { background: #8fd400; }
+  #status {
+    width: 100%;
+    font-size: 11px;
+    color: #64748b;
+    padding-top: 4px;
+  }
+  #status.ok { color: #10b981; }
+  #status.err { color: #ef4444; }
+
+  #chat {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .msg {
+    max-width: 80%;
+    padding: 10px 14px;
+    border-radius: 12px;
+    font-size: 14px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .msg.user { align-self: flex-end; background: #2563eb; color: #fff; border-bottom-right-radius: 4px; }
+  .msg.bot { align-self: flex-start; background: #1e293b; border: 1px solid #2a3550; border-bottom-left-radius: 4px; }
+  .msg.err { align-self: flex-start; background: #450a0a; border: 1px solid #ef4444; color: #fecaca; }
+  .msg.sys { align-self: center; background: transparent; color: #64748b; font-size: 12px; font-style: italic; }
+
+  #inputBar {
+    display: flex;
+    padding: 12px 16px;
+    background: #12182a;
+    border-top: 1px solid #1f2a44;
+    gap: 8px;
+  }
+  #inputBar textarea {
+    flex: 1;
+    padding: 10px 14px;
+    background: #0a0e1a;
+    border: 1px solid #2a3550;
+    border-radius: 8px;
+    color: #e2e8f0;
+    font-size: 14px;
+    font-family: inherit;
+    resize: none;
+    max-height: 120px;
+    min-height: 42px;
+  }
+  #inputBar textarea:focus { outline: none; border-color: #76b900; }
+  #inputBar button {
+    padding: 0 20px;
+    background: #76b900;
+    color: #0a0e1a;
+    border: none;
+    border-radius: 8px;
+    font-weight: 700;
+    cursor: pointer;
+    font-size: 14px;
+  }
+  #inputBar button:disabled { opacity: 0.4; cursor: not-allowed; }
+  #inputBar button:hover:not(:disabled) { background: #8fd400; }
+</style>
 </head>
 <body>
-    <div class="card">
-        <h1>🔍 Список моделей NVIDIA NIM</h1>
-        <p style="color: #94a3b8; font-size: 13px; margin-bottom: 0;">Введите ключ и нажмите «Получить список» — ниже появятся все модели, доступные вашему аккаунту.</p>
 
-        <label for="keyInput">API Key</label>
-        <input type="password" id="keyInput" value="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" spellcheck="false">
+<header>
+  <h1>🟢 NVIDIA NIM Chat</h1>
+  <input id="keyInput" type="password"
+         value="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"
+         placeholder="nvapi-..." />
+  <select id="modelSelect">
+    <option value="nvidia/nemotron-3-ultra-550b-a55b" selected>Nemotron 3 Ultra 550B</option>
+    <option value="meta/llama-3.1-8b-instruct">llama-3.1-8b-instruct</option>
+    <option value="meta/llama-3.1-70b-instruct">llama-3.1-70b-instruct</option>
+    <option value="meta/llama-3.3-70b-instruct">llama-3.3-70b-instruct</option>
+    <option value="mistralai/mistral-7b-instruct-v0.3">mistral-7b-instruct</option>
+  </select>
+  <button onclick="loadModels()">Модели</button>
+  <button onclick="clearChat()">Очистить</button>
+  <div id="status">Модель Nemotron 3 Ultra выбрана. Нажми «Модели», чтобы проверить ключ.</div>
+</header>
 
-        <button id="loadBtn" onclick="loadModels()">Получить список</button>
+<div id="chat">
+  <div class="msg sys">Чат готов. Модель Nemotron 3 Ultra 550B выбрана по умолчанию.</div>
+</div>
 
-        <div id="status"></div>
-        <div id="modelList"></div>
-    </div>
+<div id="inputBar">
+  <textarea id="userInput" rows="1" placeholder="Напиши сообщение… (Enter — отправить, Shift+Enter — перенос строки)"></textarea>
+  <button id="sendBtn" onclick="sendMessage()">→</button>
+</div>
 
-    <script>
-        async function loadModels() {
-            const key = document.getElementById('keyInput').value.trim();
-            const btn = document.getElementById('loadBtn');
-            const status = document.getElementById('status');
-            const listEl = document.getElementById('modelList');
+<script>
+  const API_BASE = "https://integrate.api.nvidia.com/v1";
+  const chat = document.getElementById("chat");
+  const input = document.getElementById("userInput");
+  const sendBtn = document.getElementById("sendBtn");
+  const statusEl = document.getElementById("status");
+  let history = [];
 
-            if (!key) {
-                status.className = 'err';
-                status.textContent = '❌ Введите ключ.';
-                status.style.display = 'block';
-                return;
-            }
+  function setStatus(text, cls = "") {
+    statusEl.textContent = text;
+    statusEl.className = cls;
+  }
 
-            btn.disabled = true;
-            btn.textContent = 'Загружаю…';
-            status.className = 'loading';
-            status.textContent = '⏳ Запрос к NVIDIA API…';
-            status.style.display = 'block';
-            listEl.style.display = 'none';
+  function addMsg(text, role) {
+    const div = document.createElement("div");
+    div.className = "msg " + role;
+    div.textContent = text;
+    chat.appendChild(div);
+    chat.scrollTop = chat.scrollHeight;
+    return div;
+  }
 
-            try {
-                const r = await fetch('https://integrate.api.nvidia.com/v1/models', {
-                    headers: {
-                        'Authorization': 'Bearer ' + key,
-                        'Accept': 'application/json'
-                    }
-                });
+  function clearChat() {
+    chat.innerHTML = '<div class="msg sys">Чат очищен.</div>';
+    history = [];
+  }
 
-                const data = await r.json();
+  async function loadModels() {
+    const key = document.getElementById("keyInput").value.trim();
+    if (!key) { setStatus("❌ Нет ключа", "err"); return; }
+    setStatus("⏳ Проверяю ключ…");
+    try {
+      const r = await fetch(API_BASE + "/models", {
+        headers: { "Authorization": "Bearer " + key, "Accept": "application/json" }
+      });
+      const data = await r.json();
+      if (r.ok) {
+        setStatus(`✅ Ключ рабочий. Доступно моделей: ${data.data?.length ?? 0}`, "ok");
+        const select = document.getElementById("modelSelect");
+        const current = select.value;
+        select.innerHTML = "";
+        (data.data || []).forEach(m => {
+          const opt = document.createElement("option");
+          opt.value = m.id;
+          opt.textContent = m.id;
+          if (m.id === current) opt.selected = true;
+          select.appendChild(opt);
+        });
+      } else {
+        setStatus(`❌ Ошибка ${r.status}: ${data.message || data.error || 'см. консоль'}`, "err");
+        console.error(data);
+      }
+    } catch (e) {
+      setStatus("❌ Сеть/CORS: " + e.message, "err");
+    }
+  }
 
-                if (r.ok) {
-                    const models = data.data || [];
-                    status.className = 'ok';
-                    status.textContent = `✅ Ключ рабочий. Доступно моделей: ${models.length}`;
-                    status.style.display = 'block';
+  async function sendMessage() {
+    const text = input.value.trim();
+    const key = document.getElementById("keyInput").value.trim();
+    const model = document.getElementById("modelSelect").value;
+    if (!text) return;
+    if (!key) { setStatus("❌ Нет ключа", "err"); return; }
 
-                    if (models.length === 0) {
-                        listEl.innerHTML = '<div style="color:#94a3b8; padding:12px;">Список пуст — возможно, у ключа нет доступа ни к одной модели.</div>';
-                    } else {
-                        listEl.innerHTML = models.map(m => `
-                            <div class="model-item">
-                                <span class="model-id">${escapeHtml(m.id)}</span>
-                                <span class="model-owner">— ${escapeHtml(m.owned_by || '—')}</span>
-                            </div>
-                        `).join('');
-                    }
-                    listEl.style.display = 'block';
-                } else {
-                    status.className = 'err';
-                    status.textContent = `❌ Ошибка ${r.status}: ${data.message || data.error?.message || JSON.stringify(data)}`;
-                    status.style.display = 'block';
-                }
-            } catch (e) {
-                status.className = 'err';
-                status.textContent = '❌ Сеть/CORS: ' + e.message + '\n\nЕсли это CORS — откройте консоль (F12), скопируйте cURL-команду и выполните в терминале.';
-                status.style.display = 'block';
-            } finally {
-                btn.disabled = false;
-                btn.textContent = 'Получить список';
-            }
-        }
+    addMsg(text, "user");
+    input.value = "";
+    input.style.height = "auto";
+    history.push({ role: "user", content: text });
 
-        function escapeHtml(s) {
-            return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-        }
-    </script>
+    sendBtn.disabled = true;
+    const botMsg = addMsg("…", "bot");
+    botMsg.textContent = "▍";
+
+    try {
+      const r = await fetch(API_BASE + "/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": "Bearer " + key,
+          "Content-Type": "application/json",
+          "Accept": "application/json"
+        },
+        body: JSON.stringify({
+          model: model,
+          messages: history,
+          temperature: 0.7,
+          max_tokens: 1024,
+          stream: false
+        })
+      });
+
+      const data = await r.json();
+
+      if (!r.ok) {
+        botMsg.className = "msg err";
+        botMsg.textContent = `❌ ${r.status}: ${data.message || data.error?.message || JSON.stringify(data).slice(0, 300)}`;
+        setStatus(`❌ Ошибка ${r.status}`, "err");
+        return;
+      }
+
+      const reply = data.choices?.[0]?.message?.content || "(пустой ответ)";
+      botMsg.textContent = reply;
+      history.push({ role: "assistant", content: reply });
+      setStatus(`✅ ${model} • токенов: ${data.usage?.total_tokens ?? "?"}`, "ok");
+    } catch (e) {
+      botMsg.className = "msg err";
+      botMsg.textContent = "❌ Сеть/CORS: " + e.message;
+      setStatus("❌ Сеть/CORS", "err");
+    } finally {
+      sendBtn.disabled = false;
+      input.focus();
+      chat.scrollTop = chat.scrollHeight;
+    }
+  }
+
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
+  });
+
+  input.addEventListener("input", () => {
+    input.style.height = "auto";
+    input.style.height = Math.min(input.scrollHeight, 120) + "px";
+  });
+</script>
 </body>
 </html>
