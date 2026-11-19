@@ -4,9 +4,24 @@ const FIREBASE_JWKS_URL = "https://www.googleapis.com/service_accounts/v1/jwk/se
 const MAX_BODY = 128 * 1024;
 const MAX_MESSAGES = 24;
 const MAX_CHARS = 12000;
+// Firebase project ID is public configuration; keep a fallback so Pages does not
+// require a second runtime variable just to validate Firebase ID tokens.
+const DEFAULT_FIREBASE_PROJECT_ID = "toypsig-2953f";
 let jwksCache = { keys: null, expires: 0 };
 const rateBuckets = new Map();
 
+function getNvidiaApiKey(env) {
+  // NVIDIA_API_KEY is the documented binding name. NVIDIA is retained as a
+  // compatibility alias for deployments where the secret was named NVIDIA.
+  const value = env?.NVIDIA_API_KEY ?? env?.NVIDIA ?? "";
+  return typeof value === "string" ? value.trim() : "";
+}
+function getFirebaseProjectId(env) {
+  const configured = typeof env?.FIREBASE_PROJECT_ID === "string"
+    ? env.FIREBASE_PROJECT_ID.trim()
+    : "";
+  return configured || DEFAULT_FIREBASE_PROJECT_ID;
+}
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
@@ -124,13 +139,14 @@ function streamNvidia(upstream) {
   });
 }
 async function handleChat(request, env) {
-  if (!env.NVIDIA_API_KEY) return json({ error: "Добавьте NVIDIA_API_KEY в Cloudflare → Settings → Variables and Secrets." }, 503);
-  if (!env.FIREBASE_PROJECT_ID) return json({ error: "Добавьте FIREBASE_PROJECT_ID в настройки Cloudflare." }, 503);
+  const nvidiaApiKey = getNvidiaApiKey(env);
+  if (!nvidiaApiKey) return json({ error: "Cloudflare не передал секрет NVIDIA_API_KEY в текущий deployment. Проверьте, что Secret добавлен для Production, затем создайте новый deployment." }, 503);
+  const firebaseProjectId = getFirebaseProjectId(env);
   const bearer = request.headers.get("authorization") || "";
   const token = bearer.match(/^Bearer\s+(.+)$/i)?.[1];
   if (!token) return json({ error: "Войдите через Google, чтобы начать чат." }, 401);
   let user;
-  try { user = await verifyFirebaseToken(token, env.FIREBASE_PROJECT_ID); }
+  try { user = await verifyFirebaseToken(token, firebaseProjectId); }
   catch { return json({ error: "Не удалось проверить вход. Войдите в аккаунт ещё раз." }, 401); }
   if (!rateAllowed(user.uid, env)) return json({ error: "Слишком много запросов. Попробуйте немного позже." }, 429);
   let body;
@@ -146,7 +162,7 @@ async function handleChat(request, env) {
     upstream = await fetch(NVIDIA_URL, {
       method: "POST",
       headers: {
-        authorization: `Bearer ${env.NVIDIA_API_KEY}`,
+        authorization: `Bearer ${nvidiaApiKey}`,
         accept: "text/event-stream",
         "content-type": "application/json"
       },
@@ -189,7 +205,15 @@ export default {
       "access-control-max-age": "86400"
     }});
     if (url.pathname === "/api/health" && request.method === "GET") {
-      return json({ ok: true, name: "Ghost AI", model: MODEL, nvidiaConfigured: Boolean(env.NVIDIA_API_KEY), firebaseConfigured: Boolean(env.FIREBASE_PROJECT_ID) });
+      const nvidiaBindings = Object.keys(env || {}).filter(name => /^(NVIDIA_API_KEY|NVIDIA)$/i.test(name));
+      return json({
+        ok: true,
+        name: "Ghost AI",
+        model: MODEL,
+        nvidiaConfigured: Boolean(getNvidiaApiKey(env)),
+        nvidiaBindings,
+        firebaseConfigured: Boolean(getFirebaseProjectId(env))
+      });
     }
     if (url.pathname === "/api/chat" && request.method === "POST") return handleChat(request, env);
     if (url.pathname.startsWith("/api/")) return json({ error: "API route not found" }, 404);
