@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#101113">
+  <meta name="description" content="Ghost AI — твой ИИ-помощник на базе NVIDIA Nemotron.">
+  <title>Ghost AI</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css">
+  <script defer src="https://www.gstatic.com/firebasejs/13.4.0/firebase-app-compat.js"></script>
+  <script defer src="https://www.gstatic.com/firebasejs/13.4.0/firebase-auth-compat.js"></script>
+  <script defer src="https://www.gstatic.com/firebasejs/13.4.0/firebase-firestore-compat.js"></script>
+  <script defer src="/config.js"></script>
+  <script defer src="/app.js"></script>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand-row">
+        <a class="brand" href="/" aria-label="Ghost AI home">
+          <span class="brand-mark"><svg viewBox="0 0 40 40" aria-hidden="true"><path d="M20 4.5c-8.1 0-14 5.9-14 14v14.1c0 2.5 2.9 3.8 4.8 2.1l3.1-2.8 3.1 2.8a4.4 4.4 0 0 0 6 0l3.1-2.8 3.1 2.8c1.9 1.7 4.8.4 4.8-2.1V18.5c0-8.1-5.9-14-14-14Z" fill="currentColor"/><circle cx="15" cy="18" r="1.7" fill="#111214"/><circle cx="25" cy="18" r="1.7" fill="#111214"/><path d="M16 24c2.2 1.8 5.8 1.8 8 0" fill="none" stroke="#111214" stroke-width="1.8" stroke-linecap="round"/></svg></span>
+          <span>ghost<span class="brand-muted">ai</span></span>
+        </a>
+        <button class="icon-button mobile-only" id="closeSidebar" aria-label="Закрыть меню">×</button>
+      </div>
+      <button class="new-chat-button" id="newChatBtn"><span class="plus">＋</span> Новый чат</button>
+      <div class="sidebar-label">История</div>
+      <div class="chat-list" id="chatList"><div class="empty-history">Здесь появятся ваши чаты</div></div>
+      <div class="sidebar-bottom">
+        <div class="model-card"><span class="status-dot"></span><span><b>Nemotron 3 Ultra</b><small>Модель активна</small></span></div>
+        <div class="account-row" id="accountRow">
+          <div class="avatar" id="avatar">G</div>
+          <div class="account-info"><b id="userName">Гость</b><small id="userEmail">Войдите, чтобы начать</small></div>
+          <button class="icon-button signout-button hidden" id="signOutBtn" title="Выйти">↗</button>
+        </div>
+      </div>
+    </aside>
+    <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+
+    <main class="main-panel">
+      <header class="topbar">
+        <div class="topbar-left">
+          <button class="icon-button menu-button" id="menuBtn" aria-label="Открыть меню">☰</button>
+          <div class="mobile-brand"><span class="mini-mark">◈</span> ghost<span>ai</span></div>
+        </div>
+        <div class="topbar-center"><span class="topbar-model-dot"></span> Ghost AI <span class="topbar-divider">·</span> Nemotron 3 Ultra <span class="chevron">⌄</span></div>
+        <div class="topbar-right">
+          <button class="signin-button" id="signInBtn"><span class="google-g">G</span> Войти через Google</button>
+          <button class="icon-button mobile-new-chat" id="mobileNewChat" aria-label="Новый чат">＋</button>
+        </div>
+      </header>
+
+      <section class="conversation" id="conversation">
+        <div class="welcome" id="welcome">
+          <div class="welcome-orb"><svg viewBox="0 0 60 60" aria-hidden="true"><path d="M30 7c-12.1 0-21 8.8-21 21v19.1c0 3.8 4.4 5.7 7.2 3.1l4.6-4.2 4.6 4.2a6.6 6.6 0 0 0 9 0l4.6-4.2 4.6 4.2c2.8 2.6 7.2.7 7.2-3.1V28C51 15.8 42.1 7 30 7Z" fill="currentColor"/><circle cx="22.5" cy="27" r="2.4" fill="#151619"/><circle cx="37.5" cy="27" r="2.4" fill="#151619"/><path d="M24 36c3.6 2.9 8.4 2.9 12 0" fill="none" stroke="#151619" stroke-width="2.4" stroke-linecap="round"/></svg></div>
+          <p class="eyebrow">ТВОЙ ИИ-ПОМОЩНИК</p>
+          <h1>Привет. Я <span>Ghost AI.</span></h1>
+          <p class="welcome-copy">О чём поговорим сегодня?</p>
+          <div class="suggestions">
+            <button class="suggestion" data-prompt="Объясни сложную тему простыми словами"><span>✦</span><b>Объяснить тему</b><small>Просто и понятно</small></button>
+            <button class="suggestion" data-prompt="Помоги придумать интересную идею для проекта"><span>⌘</span><b>Придумать идею</b><small>Найти вдохновение</small></button>
+            <button class="suggestion" data-prompt="Помоги написать красивый и понятный текст"><span>✎</span><b>Написать текст</b><small>С нуля или улучшить</small></button>
+            <button class="suggestion" data-prompt="Расскажи что-нибудь удивительное и интересное"><span>◌</span><b>Узнать новое</b><small>Открыть что-то интересное</small></button>
+          </div>
+          <div class="signin-hint" id="signinHint">Чтобы начать, войдите через Google.</div>
+        </div>
+        <div class="messages hidden" id="messages" aria-live="polite"></div>
+      </section>
+
+      <footer class="composer-area">
+        <form class="composer" id="composerForm">
+          <textarea id="messageInput" rows="1" maxlength="12000" placeholder="Напишите сообщение Ghost AI..." aria-label="Ваше сообщение"></textarea>
+          <div class="composer-bottom">
+            <div class="composer-meta"><span class="secure-icon">✧</span><span>Ghost AI может ошибаться. Проверяйте важную информацию.</span></div>
+            <div class="composer-actions">
+              <span class="model-caption">Nemotron 3 Ultra</span>
+              <button type="button" class="stop-button hidden" id="stopBtn">Остановить</button>
+              <button type="submit" class="send-button" id="sendBtn" aria-label="Отправить сообщение"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+            </div>
+          </div>
+        </form>
+        <div class="footer-note">Минималистичный интерфейс. Большие идеи.</div>
+      </footer>
+    </main>
+  </div>
+  <div class="toast" id="toast" role="status"></div>
+</body>
+</html>
