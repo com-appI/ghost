@@ -88,3 +88,24 @@ SERPER FIX (if serperConfigured is false on /api/health):
 5. Open https://ghostai-4e6.pages.dev/api/health
    Need: "serperConfigured": true
 
+
+============================================================
+FIRECRAWL SEARCH (replaces Serper)
+============================================================
+1. Create API key: https://www.firecrawl.dev (Free: 1000 credits/month, no card)
+2. Cloudflare Pages → Settings → Environment variables → Production:
+   Name:  FIRECRAWL_API_KEY
+   Value: fc-...  (no quotes)
+3. Remove old SERPER_* secrets if you want (optional)
+4. Redeploy
+5. Check: GET /api/health → "firecrawlConfigured": true
+
+Statuses (real only):
+  Searching the web…  = Firecrawl /v2/search started
+  Reading sources…    = pages extracted, feeding model
+
+Free limits (official docs):
+  - 1000 credits / month
+  - Search ~2 credits per 10 results
+  - /search rate: 10 req/min, 2 concurrent
+  - HTTP 402 when credits exhausted

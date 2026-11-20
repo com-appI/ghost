@@ -1,6 +1,6 @@
 const MODEL = "nvidia/nemotron-3-ultra-550b-a55b";
 const NVIDIA_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
-const SERPER_URL = "https://google.serper.dev/search";
+const FIRECRAWL_SEARCH_URL = "https://api.firecrawl.dev/v2/search";
 const FIREBASE_JWKS_URL = "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com";
 const MAX_BODY = 128 * 1024;
 const MAX_MESSAGES = 24;
@@ -13,17 +13,15 @@ function getNvidiaApiKey(env) {
   const value = env?.NVIDIA_API_KEY ?? env?.NVIDIA ?? "";
   return typeof value === "string" ? value.trim() : "";
 }
-function getSerperApiKey(env) {
-  // Accept common / typo secret names so Cloudflare binding still works.
+function getFirecrawlApiKey(env) {
   const value =
-    env?.SERPER_API_KEY ??
-    env?.SERPER_AIP_KEY ??  // common typo: AIP instead of API
-    env?.SERPER ??
-    env?.SERPER_KEY ??
-    env?.SERPERAPIKEY ??
+    env?.FIRECRAWL_API_KEY ??
+    env?.FIRECRAWL ??
+    env?.FIRECRAWL_KEY ??
     "";
   return typeof value === "string" ? value.trim() : "";
 }
+
 function getFirebaseProjectId(env) {
   const configured = typeof env?.FIREBASE_PROJECT_ID === "string" ? env.FIREBASE_PROJECT_ID.trim() : "";
   return configured || DEFAULT_FIREBASE_PROJECT_ID;
@@ -122,32 +120,22 @@ function shouldSearch(text, forceSearch) {
   const q = String(text || "").trim();
   if (q.length < 3) return false;
   const lower = q.toLowerCase();
-
-  // Clear non-search small talk
   const smallTalk = /^(hi|hello|hey|yo|привет|здравств|как дела|how are you|who are you|что ты|ты кто|thanks|спасибо|ok|ок|cool|пока|bye)\b/;
   if (smallTalk.test(lower) && q.length < 48) return false;
-
-  // Explicit search intent
   const explicit = [
     "найди", "найти", "поищи", "поиск", "загугли", "гугл", "search", "google", "look up", "find",
     "новости", "news", "latest", "актуальн", "сейчас", "сегодня", "today", "yesterday", "this week",
     "цена", "price", "стоимость", "курс", "version", "версия", "релиз", "release", "update",
     "источник", "sources", "сайт", "website", "ссылк", "url", "http",
     "кто выиграл", "who won", "когда вышел", "что нового", "current", "сколько стоит",
-    "weather", "погода", "расписан", "расписание", "score", "счёт", "результат матча"
+    "weather", "погода", "расписан", "расписание", "score", "счёт", "результат матча",
+    "документац", "documentation", "how to", "как сделать", "инструкц"
   ];
   if (explicit.some((h) => lower.includes(h))) return true;
-
-  // Years / versions often need live data
   if (/\b(20(2[3-9]|3[0-9]))\b/.test(q)) return true;
-
-  // Question forms about facts (ru/en) — better to search than invent
   const factualQ = /(\?|ли\b|что такое|кто такой|кто такая|где находится|когда|сколько|какой|какая|какие|why|what is|who is|where is|when did|how much|how many)/i;
   if (factualQ.test(q) && q.length >= 12) return true;
-
-  // Named entities + "про/about" style
   if (/\b(про|about|regarding)\b/i.test(lower) && q.length >= 16) return true;
-
   return false;
 }
 
@@ -160,8 +148,6 @@ function buildSearchQueries(text) {
   const q = raw.slice(0, 220);
   const queries = [];
   if (q) queries.push(q);
-
-  // Strip filler phrases for a cleaner second query
   let cleaned = q
     .replace(/^(пожалуйста|please|можешь|could you|can you|скажи|tell me|найди|поищи|search for|find)\s+/ig, "")
     .replace(/\b(в интернете|on the web|online|пожалуйста)\b/ig, "")
@@ -169,16 +155,12 @@ function buildSearchQueries(text) {
   if (cleaned && cleaned.toLowerCase() !== q.toLowerCase() && cleaned.length >= 4) {
     queries.push(cleaned.slice(0, 180));
   }
-
-  // Keyword-ish third query for long Russian questions
   if (q.length > 70) {
-    const stop = new Set(["это","как","что","или","для","при","the","and","for","with","that","this","from","про","мне","мне","пожалуйста"]);
+    const stop = new Set(["это","как","что","или","для","при","the","and","for","with","that","this","from","про","мне","пожалуйста"]);
     const words = q.replace(/[^\p{L}\p{N}\s]/gu, " ").split(/\s+/).filter((w) => w.length > 2 && !stop.has(w.toLowerCase()));
     const key = words.slice(0, 10).join(" ");
     if (key && !queries.includes(key)) queries.push(key);
   }
-
-  // unique preserve order
   const seen = new Set();
   const out = [];
   for (const item of queries) {
@@ -187,101 +169,98 @@ function buildSearchQueries(text) {
     seen.add(k);
     out.push(item);
   }
-  return out.slice(0, 3);
+  return out.slice(0, 2);
 }
 
-function mapOrganic(organic) {
-  return (Array.isArray(organic) ? organic : []).map((item) => ({
-    title: String(item.title || "").slice(0, 180),
-    url: String(item.link || item.url || "").slice(0, 500),
-    snippet: String(item.snippet || item.description || item.attributes?.Description || "").slice(0, 400),
-    domain: (() => {
-      try { return new URL(item.link || item.url || "").hostname.replace(/^www\./, ""); }
-      catch { return ""; }
-    })()
-  })).filter((s) => /^https?:\/\//i.test(s.url));
+function normalizeFirecrawlHit(item) {
+  const url = String(item.url || item.metadata?.sourceURL || item.metadata?.url || "").slice(0, 500);
+  const title = String(item.title || item.metadata?.title || "").slice(0, 180);
+  const description = String(item.description || item.snippet || item.metadata?.description || "").slice(0, 400);
+  let markdown = "";
+  if (typeof item.markdown === "string") markdown = item.markdown;
+  else if (typeof item.content === "string") markdown = item.content;
+  else if (item.metadata && typeof item.metadata.markdown === "string") markdown = item.metadata.markdown;
+  markdown = String(markdown || "").replace(/\s+/g, " ").trim().slice(0, 3500);
+  let domain = "";
+  try { domain = new URL(url).hostname.replace(/^www\./, ""); } catch {}
+  if (!/^https?:\/\//i.test(url)) return null;
+  return { title: title || domain || url, url, snippet: description, markdown, domain };
 }
 
-async function serperSearch(query, apiKey, signal, lang) {
+/**
+ * Firecrawl v2 search + optional page markdown via scrapeOptions.
+ * Docs: POST https://api.firecrawl.dev/v2/search
+ */
+async function firecrawlSearch(query, apiKey, signal, lang, { scrape = true, limit = 5 } = {}) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 14000);
+  const timer = setTimeout(() => controller.abort(), scrape ? 55000 : 20000);
   const onAbort = () => controller.abort();
   if (signal) signal.addEventListener("abort", onAbort, { once: true });
   try {
     const body = {
-      q: query,
-      num: 10,
-      gl: lang === "ru" ? "ru" : "us",
-      hl: lang === "ru" ? "ru" : "en"
+      query: String(query).slice(0, 500),
+      limit,
+      sources: [{ type: "web" }],
+      country: lang === "ru" ? "RU" : "US",
+      timeout: scrape ? 50000 : 15000,
+      ignoreInvalidURLs: true
     };
-    const response = await fetch(SERPER_URL, {
+    if (scrape) {
+      body.scrapeOptions = {
+        formats: [{ type: "markdown" }],
+        onlyMainContent: true
+      };
+    }
+    const headers = { "content-type": "application/json" };
+    if (apiKey) headers.authorization = `Bearer ${apiKey}`;
+
+    const response = await fetch(FIRECRAWL_SEARCH_URL, {
       method: "POST",
-      headers: {
-        "X-API-KEY": apiKey,
-        "content-type": "application/json"
-      },
+      headers,
       body: JSON.stringify(body),
       signal: controller.signal
     });
+
     if (response.status === 401 || response.status === 403) {
-      const err = new Error("Serper authentication failed");
-      err.code = "serper_auth";
+      const err = new Error("Firecrawl authentication failed");
+      err.code = "search_auth";
+      throw err;
+    }
+    if (response.status === 402) {
+      const err = new Error("Firecrawl credits exhausted");
+      err.code = "search_quota";
       throw err;
     }
     if (response.status === 429) {
-      const err = new Error("Serper rate limited");
-      err.code = "serper_busy";
+      const err = new Error("Firecrawl rate limited");
+      err.code = "search_busy";
       throw err;
     }
     if (!response.ok) {
       let detail = "";
-      try { detail = (await response.text()).slice(0, 200); } catch {}
-      const err = new Error(`Serper HTTP ${response.status} ${detail}`);
-      err.code = "serper_error";
+      try { detail = (await response.text()).slice(0, 240); } catch {}
+      const err = new Error(`Firecrawl HTTP ${response.status} ${detail}`);
+      err.code = "search_error";
       throw err;
     }
+
     const data = await response.json();
-    const sources = mapOrganic(data.organic);
+    // v2 shape: { success, data: { web: [...] } } or data as array (compat)
+    let rows = [];
+    if (Array.isArray(data?.data?.web)) rows = data.data.web;
+    else if (Array.isArray(data?.data)) rows = data.data;
+    else if (Array.isArray(data?.web)) rows = data.web;
+    else if (Array.isArray(data?.results)) rows = data.results;
 
-    // Answer box / knowledge graph as synthetic high-priority snippets
-    if (data.answerBox) {
-      const ab = data.answerBox;
-      const answer = String(ab.answer || ab.snippet || ab.title || "").slice(0, 400);
-      const link = String(ab.link || ab.url || sources[0]?.url || "");
-      if (answer) {
-        sources.unshift({
-          title: String(ab.title || "Answer box").slice(0, 180),
-          url: link.startsWith("http") ? link : (sources[0]?.url || "https://www.google.com"),
-          snippet: answer,
-          domain: (() => { try { return new URL(link).hostname.replace(/^www\./, ""); } catch { return "answer"; } })()
-        });
-      }
-    }
-    if (data.knowledgeGraph) {
-      const kg = data.knowledgeGraph;
-      const desc = String(kg.description || "").slice(0, 400);
-      if (desc) {
-        sources.unshift({
-          title: String(kg.title || "Knowledge graph").slice(0, 180),
-          url: String(kg.website || kg.descriptionLink || sources[0]?.url || "https://www.google.com"),
-          snippet: desc,
-          domain: (() => {
-            try { return new URL(kg.website || "").hostname.replace(/^www\./, ""); }
-            catch { return "knowledge"; }
-          })()
-        });
-      }
-    }
-
-    // de-dupe by url
+    const sources = [];
     const seen = new Set();
-    const unique = [];
-    for (const s of sources) {
-      if (!s.url || seen.has(s.url)) continue;
-      seen.add(s.url);
-      unique.push(s);
+    for (const row of rows) {
+      const hit = normalizeFirecrawlHit(row);
+      if (!hit || seen.has(hit.url)) continue;
+      seen.add(hit.url);
+      sources.push(hit);
     }
-    return unique;
+    return sources;
   } finally {
     clearTimeout(timer);
     if (signal) signal.removeEventListener("abort", onAbort);
@@ -291,27 +270,33 @@ async function serperSearch(query, apiKey, signal, lang) {
 function formatSearchContext(sources, query) {
   if (!sources.length) {
     return [
-      "Web search was executed but returned no usable results for:",
+      "Web search ran but returned no usable pages for:",
       query,
       "Tell the user that live sources were not found. Do not invent URLs."
     ].join("\n");
   }
-  const lines = sources.map((s, i) =>
-    `[${i + 1}] ${s.title}\nURL: ${s.url}\nSnippet: ${s.snippet || "(no snippet)"}`
-  );
+  const blocks = sources.map((s, i) => {
+    const body = s.markdown || s.snippet || "(no extractable text)";
+    return [
+      `[${i + 1}] ${s.title}`,
+      `URL: ${s.url}`,
+      `Domain: ${s.domain || "unknown"}`,
+      `Content:`,
+      body
+    ].join("\n");
+  });
   return [
-    "LIVE WEB SEARCH RESULTS (Google via Serper). These are search snippets, not full pages.",
-    "Base factual claims on this evidence. Cite only these real URLs. Never invent links.",
-    "If snippets conflict or are thin, say so clearly.",
+    "LIVE WEB EVIDENCE (Firecrawl search + page extract).",
+    "Use ONLY these sources for factual claims. Cite real URLs below. Never invent links.",
+    "If extracts are thin or conflict, say so.",
     "User query: " + query,
     "",
-    lines.join("\n\n")
+    blocks.join("\n\n---\n\n")
   ].join("\n");
 }
 
 function injectSearchEvidence(messages, sources, query) {
   const evidence = formatSearchContext(sources, query);
-  // Prefer injecting into the last user message so the model always sees evidence next to the question.
   const cloned = messages.map((m) => ({ role: m.role, content: m.content }));
   for (let i = cloned.length - 1; i >= 0; i--) {
     if (cloned[i].role === "user") {
@@ -335,7 +320,7 @@ function streamChat(request, messages, env, options = {}) {
   request.signal.addEventListener("abort", abortFromRequest, { once: true });
 
   const nvidiaApiKey = getNvidiaApiKey(env);
-  const serperApiKey = getSerperApiKey(env);
+  const firecrawlApiKey = getFirecrawlApiKey(env);
   const forceSearch = !!options.forceSearch;
 
   return new ReadableStream({
@@ -358,78 +343,80 @@ function streamChat(request, messages, env, options = {}) {
         let modelMessages = messages.slice();
         let usedSearch = false;
 
-        if (wantSearch) {
-          if (!serperApiKey) {
-            sendError("config", "Search is not configured. Set SERPER_API_KEY in Cloudflare secrets.");
+if (wantSearch) {
+          if (!firecrawlApiKey) {
+            sendError("config", "Search is not configured. Set FIRECRAWL_API_KEY in Cloudflare secrets.");
             return;
           }
-          // Status only when Serper is actually about to run
-          send({ type: "status", stage: "search", label: "Checking the site…" });
+          // Real Firecrawl call only
+          send({ type: "status", stage: "search", label: "Searching the web…" });
           usedSearch = true;
           const lang = detectLang(userText);
           const queries = buildSearchQueries(userText);
           try {
             for (const query of queries) {
               if (aborter.signal.aborted) break;
-              const batch = await serperSearch(query, serperApiKey, aborter.signal, lang);
+              // Search + scrape page markdown in one Firecrawl call
+              const batch = await firecrawlSearch(query, firecrawlApiKey, aborter.signal, lang, {
+                scrape: true,
+                limit: 5
+              });
               for (const item of batch) {
                 if (!sources.some((s) => s.url === item.url)) sources.push(item);
               }
-              // Enough high-quality hits
-              if (sources.length >= 8) break;
+              if (sources.length >= 5) break;
             }
-            // If still empty, one broader fallback query
             if (!sources.length && queries[0]) {
-              const fallback = queries[0].split(/\s+/).slice(0, 6).join(" ");
-              if (fallback) {
-                const batch = await serperSearch(fallback, serperApiKey, aborter.signal, lang);
-                for (const item of batch) {
-                  if (!sources.some((s) => s.url === item.url)) sources.push(item);
-                }
+              send({ type: "status", stage: "search", label: "Searching the web…" });
+              const fallback = queries[0].split(/\s+/).slice(0, 7).join(" ");
+              const batch = await firecrawlSearch(fallback, firecrawlApiKey, aborter.signal, lang, {
+                scrape: true,
+                limit: 5
+              });
+              for (const item of batch) {
+                if (!sources.some((s) => s.url === item.url)) sources.push(item);
               }
             }
           } catch (error) {
             if (aborter.signal.aborted) return;
-            console.error("Serper failed", error?.code || error?.message || error);
-            if (error?.code === "serper_auth") {
-              sendError("serper_auth", "Search API key was rejected. Check SERPER_API_KEY.");
+            console.error("Firecrawl failed", error?.code || error?.message || error);
+            if (error?.code === "search_auth") {
+              sendError("search_auth", "Search API key was rejected. Check FIRECRAWL_API_KEY.");
               return;
             }
-            if (error?.code === "serper_busy") {
+            if (error?.code === "search_quota") {
+              sendError("busy", "Search free limit is exhausted. Try again later or upgrade Firecrawl credits.", 300);
+              return;
+            }
+            if (error?.code === "search_busy") {
               sendError("busy", "Search is busy right now. Please wait and try again in 2.5 minutes.", 150);
               return;
             }
             if (error?.name === "AbortError") {
-              sendError("serper_error", "Search timed out. Please try again.");
+              sendError("search_error", "Search timed out. Please try again.");
               return;
             }
-            sendError("serper_error", "Search failed. Please try again.");
+            sendError("search_error", "Search failed. Please try again.");
             return;
           }
 
-          send({ type: "status", stage: "resources", label: "Checking resources…" });
+          send({ type: "status", stage: "resources", label: "Reading sources…" });
           if (sources.length) {
             send({
               type: "sources",
-              items: sources.slice(0, 8).map((s) => ({
+              items: sources.slice(0, 6).map((s) => ({
                 title: s.title,
                 url: s.url,
-                snippet: s.snippet,
+                snippet: (s.snippet || s.markdown || "").slice(0, 220),
                 domain: s.domain
               }))
             });
           } else {
-            // Honest empty result — still continue to model with explicit note
-            send({
-              type: "status",
-              stage: "resources",
-              label: "No live sources found…"
-            });
+            send({ type: "status", stage: "resources", label: "No live sources found…" });
           }
 
-          modelMessages = injectSearchEvidence(messages, sources.slice(0, 8), userText);
+          modelMessages = injectSearchEvidence(messages, sources.slice(0, 5), userText);
         }
-
         send({ type: "status", stage: "answer", label: "Formulating the answer…" });
 
         const upstream = await fetch(NVIDIA_URL, {
@@ -583,16 +570,16 @@ export default {
       "access-control-max-age": "86400"
     }});
     if (url.pathname === "/api/health" && request.method === "GET") {
-      const serperBindings = Object.keys(env || {}).filter((name) =>
-        /serper/i.test(name)
+      const firecrawlBindings = Object.keys(env || {}).filter((name) =>
+        /firecrawl/i.test(name)
       );
       return json({
         ok: true,
         name: "Ghost AI",
         model: MODEL,
         nvidiaConfigured: Boolean(getNvidiaApiKey(env)),
-        serperConfigured: Boolean(getSerperApiKey(env)),
-        serperBindings,
+        firecrawlConfigured: Boolean(getFirecrawlApiKey(env)),
+        firecrawlBindings,
         firebaseConfigured: Boolean(getFirebaseProjectId(env))
       });
     }
