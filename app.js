@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const config = window.GHOST_CONFIG || {};
+  const config = window.CHATCLAUD_CONFIG || {};
   const $ = (id) => document.getElementById(id);
   const apiBase = String(config.apiBaseUrl || '').replace(/\/$/, '');
   const state = {
@@ -119,7 +119,7 @@
   function updateAuthUI(user) {
     state.user = user || null;
     const signedIn = Boolean(user);
-    const displayName = signedIn ? (user.displayName || 'Ghost user') : 'Guest';
+    const displayName = signedIn ? (user.displayName || 'ChatClaud user') : 'Guest';
     const email = signedIn ? (user.email || 'Google account') : 'Sign in to sync chats';
     if (els.profileHint) els.profileHint.textContent = signedIn ? displayName : 'Guest';
     if (els.accountHint) els.accountHint.textContent = signedIn ? 'Signed in' : 'Sign in';
@@ -417,7 +417,7 @@
   const GHOST_SVG = '<svg viewBox="0 0 64 64" fill="none"><path d="M32 6c-11 0-20 9.2-20 22.2V46c0 1.4 1.5 2.3 2.7 1.6L20 44.2l5.2 5.4c.8.8 2 .8 2.8 0L32 45.6l4-4 4 4c.8.8 2 .8 2.8 0l5.2-5.4 5.3 3.4c1.2.7 2.7-.2 2.7-1.6V28.2C56 15.2 47 6 32 6z" fill="#F2F2F4"/><circle cx="24.5" cy="28" r="3.2" fill="#111"/><circle cx="39.5" cy="28" r="3.2" fill="#111"/></svg>';
 
   // Public event interface: server events drive the indicator; the UI never guesses a stage.
-  window.GhostAgent = {
+  window.ChatClaudAgent = {
     emit(type, payload) {
       if (type === 'status') AgentUI.show(typeof payload === 'string' ? payload : payload?.label);
       if (type === 'done' || type === 'error') AgentUI.hide();
@@ -520,7 +520,7 @@
   function handlePacket(packet, requestId) {
     if (requestId !== state.requestSeq || !packet || typeof packet !== 'object') return;
     if (packet.type === 'status') {
-      window.GhostAgent.emit('status', packet.label || packet.stage || 'Thinking…');
+      window.ChatClaudAgent.emit('status', packet.label || packet.stage || 'Thinking…');
     } else if (packet.type === 'sources') {
       const items = Array.isArray(packet.items) ? packet.items : [];
       const assistant = state.messages[state.messages.length - 1];
@@ -539,7 +539,7 @@
         scrollBottom();
       }
     } else if (packet.type === 'done') {
-      window.GhostAgent.emit('done');
+      window.ChatClaudAgent.emit('done');
       // Final pretty render (markdown / sources) once, not every token
       const assistant = state.messages[state.messages.length - 1];
       if (assistant?.role === 'assistant' && state.streamBody) {
@@ -549,7 +549,7 @@
         }
       }
     } else if (packet.type === 'error') {
-      window.GhostAgent.emit('error');
+      window.ChatClaudAgent.emit('error');
       const error = new Error(packet.message || 'The server could not complete the request.');
       error.code = packet.code || 'server_error';
       error.retryAfterSec = Number(packet.retryAfterSec) || 0;
@@ -652,7 +652,7 @@
       }
       buffer += decoder.decode();
       if (buffer.trim()) processFrame(buffer);
-      if (!receivedDone && state.streamText.trim()) window.GhostAgent.emit('done');
+      if (!receivedDone && state.streamText.trim()) window.ChatClaudAgent.emit('done');
       if (!state.streamText.trim()) {
         const assistant = state.messages[state.messages.length - 1];
         if (assistant?.role === 'assistant' && !assistant.error) assistant.content = 'The model returned an empty response. Please try again.';
@@ -661,11 +661,11 @@
     } catch (error) {
       if (requestId !== state.requestSeq) return;
       if (error.name === 'AbortError') {
-        window.GhostAgent.emit('done');
+        window.ChatClaudAgent.emit('done');
         const assistant = state.messages[state.messages.length - 1];
         if (assistant?.role === 'assistant' && !assistant.content) state.messages.pop();
       } else {
-        console.error('Ghost AI stream error:', error.code || error.message);
+        console.error('ChatClaud stream error:', error.code || error.message);
         const busy = error.code === 'busy' || error.retryAfterSec > 0;
         if (busy) state.cooldownUntil = Date.now() + (error.retryAfterSec || 150) * 1000;
         showErrorMessage(error.message || 'The response failed.', busy);
@@ -674,7 +674,7 @@
       await saveActiveChat();
     } finally {
       if (requestId === state.requestSeq) {
-        window.GhostAgent.emit('done');
+        window.ChatClaudAgent.emit('done');
         state.controller = null;
         state.streamBody = null;
         setLoading(false);
@@ -688,7 +688,7 @@
     state.requestSeq += 1;
     if (state.controller) state.controller.abort();
     state.controller = null;
-    window.GhostAgent.emit('done');
+    window.ChatClaudAgent.emit('done');
     const assistant = state.messages[state.messages.length - 1];
     if (assistant?.role === 'assistant' && !assistant.content) assistant.content = 'Generation stopped.';
     setLoading(false);
@@ -713,7 +713,7 @@
     state.authMode = mode;
     const registering = mode === 'register';
     els.authTitle.textContent = registering ? 'Create account' : 'Welcome back';
-    els.authSubtitle.textContent = registering ? 'Register to save your chats.' : 'Sign in to continue using Ghost AI.';
+    els.authSubtitle.textContent = registering ? 'Register to save your chats.' : 'Sign in to continue using ChatClaud.';
     els.authName.classList.toggle('hidden', !registering);
     els.authNameLabel.classList.toggle('hidden', !registering);
     els.authName.required = registering;
@@ -757,7 +757,7 @@
         const name = els.authName.value.trim();
         if (name) await credential.user.updateProfile({ displayName: name });
         closeAuth();
-        toast('Account created. Welcome to Ghost AI.');
+        toast('Account created. Welcome to ChatClaud.');
       } else {
         await state.auth.signInWithEmailAndPassword(email, password);
         closeAuth();
@@ -914,5 +914,5 @@
   initializeFirebase();
   fetch(`${apiBase}/api/health`).then((response) => response.json()).then((health) => {
     if (!health.nvidiaConfigured) toast('Add NVIDIA_API_KEY in Cloudflare settings.');
-  }).catch(() => console.info('Ghost AI health check unavailable.'));
+  }).catch(() => console.info('ChatClaud health check unavailable.'));
 })();

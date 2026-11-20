@@ -1,7 +1,7 @@
-/* Ghost AI public configuration.
+/* ChatClaud public configuration.
    apiKey below is Firebase's browser project identifier, not the NVIDIA secret.
    NVIDIA_API_KEY must only exist in the server's environment. */
-window.GHOST_CONFIG = {
+window.CHATCLAUD_CONFIG = {
   // Empty = use this Cloudflare Pages origin for both the app and its Worker API.
   apiBaseUrl: '',
   firebase: {
