@@ -77,3 +77,14 @@ SERPER (Google Search) setup
 
 Search runs only when the question needs live web info (or forceSearch).
 Statuses "Checking the site…" / "Checking resources…" fire only on real Serper calls.
+
+SERPER FIX (if serperConfigured is false on /api/health):
+1. Cloudflare Dashboard → Pages → ghostai-4e6 → Settings → Environment variables
+2. Production (not only Preview):
+   Name exactly: SERPER_API_KEY
+   Value: your serper.dev key (no quotes, no spaces)
+3. Save
+4. Deployments → Retry deployment / Create new deployment (REQUIRED — secrets apply on next deploy)
+5. Open https://ghostai-4e6.pages.dev/api/health
+   Need: "serperConfigured": true
+

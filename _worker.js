@@ -14,7 +14,13 @@ function getNvidiaApiKey(env) {
   return typeof value === "string" ? value.trim() : "";
 }
 function getSerperApiKey(env) {
-  const value = env?.SERPER_API_KEY ?? "";
+  // Accept common secret names so a misnamed Cloudflare binding still works.
+  const value =
+    env?.SERPER_API_KEY ??
+    env?.SERPER ??
+    env?.SERPER_KEY ??
+    env?.SERPERAPIKEY ??
+    "";
   return typeof value === "string" ? value.trim() : "";
 }
 function getFirebaseProjectId(env) {
@@ -576,12 +582,16 @@ export default {
       "access-control-max-age": "86400"
     }});
     if (url.pathname === "/api/health" && request.method === "GET") {
+      const serperBindings = Object.keys(env || {}).filter((name) =>
+        /serper/i.test(name)
+      );
       return json({
         ok: true,
         name: "Ghost AI",
         model: MODEL,
         nvidiaConfigured: Boolean(getNvidiaApiKey(env)),
         serperConfigured: Boolean(getSerperApiKey(env)),
+        serperBindings,
         firebaseConfigured: Boolean(getFirebaseProjectId(env))
       });
     }
