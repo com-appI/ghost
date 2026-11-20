@@ -5,68 +5,61 @@
   const $ = (id) => document.getElementById(id);
   const apiBase = String(config.apiBaseUrl || '').replace(/\/$/, '');
   const state = {
-    auth: null,
-    db: null,
-    user: null,
-    chats: [],
-    activeChatId: null,
-    messages: [],
-    createdAt: null,
-    loading: false,
-    controller: null,
-    toastTimer: null,
-    authMode: 'login'
+    auth: null, db: null, user: null, chats: [], activeChatId: null,
+    messages: [], createdAt: null, loading: false, controller: null,
+    toastTimer: null, authMode: 'login', cooldownUntil: 0,
+    streamText: '', streamBody: null, requestSeq: 0
   };
 
   const els = {
-    sidebar: $('sidebar'), sidebarBackdrop: $('sidebarBackdrop'), closeSidebar: $('closeSidebar'),
-    menuBtn: $('menuBtn'), newChatBtn: $('newChatBtn'), mobileNewChat: $('mobileNewChat'),
-    chatList: $('chatList'), signInBtn: $('signInBtn'), signOutBtn: $('signOutBtn'),
-    userName: $('userName'), userEmail: $('userEmail'), avatar: $('avatar'),
-    welcome: $('welcome'), messages: $('messages'), signinHint: $('signinHint'),
-    composerForm: $('composerForm'), messageInput: $('messageInput'), sendBtn: $('sendBtn'),
-    stopBtn: $('stopBtn'), toast: $('toast'), authOverlay: $('authOverlay'), authClose: $('authClose'),
-    authForm: $('authForm'), authName: $('authName'), authNameLabel: $('authNameLabel'),
-    authEmail: $('authEmail'), authPassword: $('authPassword'), authSubmit: $('authSubmit'),
-    authGoogle: $('authGoogle'), authForgot: $('authForgot'), authError: $('authError'),
-    authTitle: $('authTitle'), authSubtitle: $('authSubtitle'), loginTab: $('loginTab'), registerTab: $('registerTab'),
+    feed: $('feed'), empty: $('empty'), input: $('input'), send: $('btnSend'), stop: $('btnStop'),
+    search: $('btnSearch'), mic: $('btnMic'), menu: $('btnMenu'), side: $('side'), scrim: $('scrim'),
+    history: $('history'), toast: $('toast'), settings: $('settings'),
+    settingsBack: $('btnSettingsBack'), openSettings: $('btnOpenSettings'),
+    openProfile: $('btnOpenProfile'), openAuth: $('btnOpenAuth'),
+    profileHint: $('profileHint'), accountHint: $('accountHint'), sideUser: $('sideUser'),
+    authOverlay: $('authOverlay'), authClose: $('authClose'), authForm: $('authForm'),
+    authName: $('authName'), authNameLabel: $('authNameLabel'), authEmail: $('authEmail'),
+    authPassword: $('authPassword'), authSubmit: $('authSubmit'), authGoogle: $('authGoogle'),
+    authForgot: $('authForgot'), authError: $('authError'), authTitle: $('authTitle'),
+    authSubtitle: $('authSubtitle'), loginTab: $('loginTab'), registerTab: $('registerTab'),
     profileOverlay: $('profileOverlay'), profileClose: $('profileClose'), profileAvatar: $('profileAvatar'),
-    profileDisplayName: $('profileDisplayName'), profileEmailText: $('profileEmailText'), profileNameInput: $('profileNameInput'),
-    profileSaveBtn: $('profileSaveBtn'), profileSignoutBtn: $('profileSignoutBtn'), profileError: $('profileError'),
-    settingsOverlay: $('settingsOverlay'), settingsClose: $('settingsClose'), settingLightTheme: $('settingLightTheme'),
-    settingEnterSend: $('settingEnterSend'), settingAnimations: $('settingAnimations'),
-    searchOverlay: $('searchOverlay'), searchClose: $('searchClose'), searchCloseAction: $('searchCloseAction'),
-    searchBtn: $('searchBtn'), micBtn: $('micBtn'), sideProfileBtn: $('sideProfileBtn'), sideSettingsBtn: $('sideSettingsBtn'), accountRow: $('accountRow')
+    profileDisplayName: $('profileDisplayName'), profileEmailText: $('profileEmailText'),
+    profileNameInput: $('profileNameInput'), profileSaveBtn: $('profileSaveBtn'),
+    profileSignoutBtn: $('profileSignoutBtn'), profileError: $('profileError'),
+    btnProfile: $('btnProfile'), btnAuth: $('btnAuth'),
+    setHaptic: $('setHaptic'), toggleHaptic: $('toggleHaptic'),
+    setEnter: $('setSendEnter'), toggleEnter: $('toggleEnter'),
+    setAnimations: $('setAnimations'), toggleAnimations: $('toggleAnimations')
   };
 
   const preferences = {
-    lightTheme: localStorage.getItem('ghost-light-theme') === 'true',
+    haptics: localStorage.getItem('ghost-haptics') === 'true',
     enterToSend: localStorage.getItem('ghost-enter-send') !== 'false',
     animations: localStorage.getItem('ghost-animations') !== 'false'
   };
-
   let voiceRecognition = null;
   let voiceListening = false;
 
   function toast(message) {
     els.toast.textContent = message;
-    els.toast.classList.add('show');
+    els.toast.classList.add('on');
     clearTimeout(state.toastTimer);
-    state.toastTimer = setTimeout(() => els.toast.classList.remove('show'), 3000);
+    state.toastTimer = setTimeout(() => els.toast.classList.remove('on'), 2600);
   }
 
   function escapeHtml(value) {
-    return String(value).replace(/[&<>"']/g, (char) => ({
+    return String(value ?? '').replace(/[&<>"']/g, (char) => ({
       '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
     })[char]);
   }
 
   function formatMessage(value) {
-    const codeBlocks = [];
+    const blocks = [];
     let safe = escapeHtml(value || '');
-    safe = safe.replace(/```(?:[a-zA-Z0-9_-]+)?\n?([\s\S]*?)```/g, (_match, code) => {
-      const key = `%%CODE_BLOCK_${codeBlocks.length}%%`;
-      codeBlocks.push(`<pre class="code-block"><code>${code.replace(/\n$/, '')}</code></pre>`);
+    safe = safe.replace(/```([\w+-]*)\n?([\s\S]*?)```/g, (_match, language, code) => {
+      const key = `%%CODE_${blocks.length}%%`;
+      blocks.push(`<pre><code>${code.replace(/\n$/, '')}</code></pre>`);
       return key;
     });
     safe = safe.replace(/^### (.+)$/gm, '<h3>$1</h3>')
@@ -74,152 +67,238 @@
       .replace(/^# (.+)$/gm, '<h1>$1</h1>')
       .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
       .replace(/\*(.+?)\*/g, '<em>$1</em>')
-      .replace(/`([^`\n]+)`/g, '<code class="inline-code">$1</code>')
-      .replace(/^\s*[-*] (.+)$/gm, '<span class="md-list-item">• $1</span>')
+      .replace(/`([^`\n]+)`/g, '<code>$1</code>')
       .replace(/\n/g, '<br>');
-    return safe.replace(/%%CODE_BLOCK_(\d+)%%/g, (_match, index) => codeBlocks[Number(index)] || '');
-  }
-
-  function closeSidebar() {
-    els.sidebar.classList.remove('open');
-    els.sidebarBackdrop.classList.remove('show');
-  }
-
-  function closeOverlay(overlay) {
-    if (overlay) overlay.classList.add('hidden');
+    return safe.replace(/%%CODE_(\d+)%%/g, (_match, index) => blocks[Number(index)] || '');
   }
 
   function applyPreferences() {
-    document.body.classList.toggle('light-theme', preferences.lightTheme);
     document.body.classList.toggle('no-animations', !preferences.animations);
-    if (els.settingLightTheme) els.settingLightTheme.checked = preferences.lightTheme;
-    if (els.settingEnterSend) els.settingEnterSend.checked = preferences.enterToSend;
-    if (els.settingAnimations) els.settingAnimations.checked = preferences.animations;
+    els.toggleHaptic?.classList.toggle('on', preferences.haptics);
+    els.toggleEnter?.classList.toggle('on', preferences.enterToSend);
+    els.toggleAnimations?.classList.toggle('on', preferences.animations);
+  }
+
+  function tapHaptic() {
+    if (preferences.haptics && typeof navigator.vibrate === 'function') navigator.vibrate(8);
   }
 
   function savePreferences() {
-    localStorage.setItem('ghost-light-theme', String(preferences.lightTheme));
+    localStorage.setItem('ghost-haptics', String(preferences.haptics));
     localStorage.setItem('ghost-enter-send', String(preferences.enterToSend));
     localStorage.setItem('ghost-animations', String(preferences.animations));
     applyPreferences();
   }
 
+  function closeSide() {
+    els.side.classList.remove('on');
+    els.scrim.classList.remove('on');
+  }
+  function openSide() {
+    tapHaptic();
+    els.side.classList.add('on');
+    els.scrim.classList.add('on');
+  }
+  function openSettings() {
+    tapHaptic();
+    closeSide();
+    els.settings.classList.add('on');
+  }
+  function closeSettings() { els.settings.classList.remove('on'); }
   function openProfile() {
-    closeSidebar();
-    if (!state.user) { openAuth('login'); return; }
+    tapHaptic();
+    closeSide();
+    if (!state.user) return openAuth('login');
     els.profileError.textContent = '';
     els.profileNameInput.value = state.user.displayName || '';
     els.profileOverlay.classList.remove('hidden');
   }
-
-  function openSettings() {
-    closeSidebar();
-    els.settingsOverlay.classList.remove('hidden');
-  }
-
-  function openSearch() {
-    els.searchOverlay.classList.remove('hidden');
-  }
-
-  function openSidebar() {
-    els.sidebar.classList.add('open');
-    els.sidebarBackdrop.classList.add('show');
-  }
+  function closeProfile() { els.profileOverlay.classList.add('hidden'); }
 
   function updateAuthUI(user) {
     state.user = user || null;
     const signedIn = Boolean(user);
-    els.signInBtn.classList.toggle('hidden', signedIn);
-    els.signOutBtn.classList.toggle('hidden', !signedIn);
-    els.userName.textContent = signedIn ? (user.displayName || 'Пользователь') : 'Гость';
-    els.userEmail.textContent = signedIn ? (user.email || 'Google аккаунт') : 'Войдите, чтобы начать';
-    els.avatar.textContent = signedIn ? (user.displayName || user.email || 'G').slice(0, 1).toUpperCase() : 'G';
-    if (signedIn && user.photoURL) {
-      try {
-        const photoUrl = new URL(user.photoURL);
-        if (photoUrl.protocol === 'https:') {
-          els.avatar.style.backgroundImage = `url("${photoUrl.href}")`;
-          els.avatar.textContent = '';
-        } else {
-          els.avatar.style.backgroundImage = '';
-        }
-      } catch {
-        els.avatar.style.backgroundImage = '';
-      }
-    } else {
-      els.avatar.style.backgroundImage = '';
-    }
-    els.signinHint.textContent = signedIn ? 'Готово. Напишите сообщение ниже.' : 'Войдите или создайте аккаунт, чтобы начать.';
-    if (els.profileDisplayName) els.profileDisplayName.textContent = signedIn ? (user.displayName || 'Пользователь') : 'Гость';
-    if (els.profileEmailText) els.profileEmailText.textContent = signedIn ? (user.email || 'Аккаунт Google') : 'Нет активного аккаунта';
+    const displayName = signedIn ? (user.displayName || 'Ghost user') : 'Guest';
+    const email = signedIn ? (user.email || 'Google account') : 'Sign in to sync chats';
+    if (els.profileHint) els.profileHint.textContent = signedIn ? displayName : 'Guest';
+    if (els.accountHint) els.accountHint.textContent = signedIn ? 'Signed in' : 'Sign in';
+    if (els.sideUser) els.sideUser.textContent = signedIn ? `${displayName} · ${email}` : 'Not signed in';
+    if (els.profileDisplayName) els.profileDisplayName.textContent = displayName;
+    if (els.profileEmailText) els.profileEmailText.textContent = email;
     if (els.profileNameInput && signedIn) els.profileNameInput.value = user.displayName || '';
     if (els.profileAvatar) {
       els.profileAvatar.textContent = signedIn ? (user.displayName || user.email || 'G').slice(0, 1).toUpperCase() : 'G';
       els.profileAvatar.style.backgroundImage = '';
       if (signedIn && user.photoURL) {
         try {
-          const profilePhoto = new URL(user.photoURL);
-          if (profilePhoto.protocol === 'https:') {
-            els.profileAvatar.style.backgroundImage = `url("${profilePhoto.href}")`;
+          const photo = new URL(user.photoURL);
+          if (photo.protocol === 'https:') {
+            els.profileAvatar.style.backgroundImage = `url("${photo.href}")`;
             els.profileAvatar.textContent = '';
           }
-        } catch { /* Ignore an invalid profile image URL. */ }
+        } catch { /* Ignore invalid photo URLs. */ }
       }
     }
   }
 
-  function newChat() {
-    if (state.loading) stopGeneration();
-    state.activeChatId = null;
-    state.createdAt = null;
-    state.messages = [];
-    renderMessages();
-    closeSidebar();
-    els.messageInput.focus();
-  }
-
-  function renderChatList() {
+  function renderHistory() {
+    els.history.innerHTML = '';
     if (!state.user) {
-      els.chatList.innerHTML = '<div class="empty-history">Войдите, чтобы сохранять историю чатов</div>';
+      const empty = document.createElement('div');
+      empty.style.cssText = 'padding:16px 12px;color:#8e8e93;font-size:13px;';
+      empty.textContent = 'Sign in to sync your chats';
+      els.history.appendChild(empty);
       return;
     }
     if (!state.chats.length) {
-      els.chatList.innerHTML = '<div class="empty-history">Здесь появятся ваши чаты</div>';
+      const empty = document.createElement('div');
+      empty.style.cssText = 'padding:16px 12px;color:#8e8e93;font-size:13px;';
+      empty.textContent = 'No chats yet';
+      els.history.appendChild(empty);
       return;
     }
-    els.chatList.innerHTML = state.chats.map((chat) => `
-      <button class="chat-item ${chat.id === state.activeChatId ? 'active' : ''}" data-chat-id="${escapeHtml(chat.id)}" title="${escapeHtml(chat.title || 'Новый чат')}">${escapeHtml(chat.title || 'Новый чат')}</button>
-    `).join('');
+    state.chats.forEach((chat) => {
+      const row = document.createElement('div');
+      row.className = 'swipe-row';
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.className = `chat-item${chat.id === state.activeChatId ? ' active' : ''}`;
+      item.dataset.chatId = chat.id;
+      const meta = document.createElement('span');
+      meta.className = 'meta';
+      const title = document.createElement('span');
+      title.className = 'title';
+      title.textContent = chat.title || 'New chat';
+      const sub = document.createElement('span');
+      sub.className = 'sub';
+      const date = chat.updatedAt?.toDate ? chat.updatedAt.toDate() : (chat.updatedAt ? new Date(chat.updatedAt) : null);
+      sub.textContent = date && !Number.isNaN(date.getTime()) ? date.toLocaleDateString() : 'Saved chat';
+      meta.append(title, sub);
+      item.appendChild(meta);
+      row.appendChild(item);
+      els.history.appendChild(row);
+    });
   }
 
   function renderMessages() {
-    const hasMessages = state.messages.length > 0;
-    els.welcome.classList.toggle('hidden', hasMessages);
-    els.messages.classList.toggle('hidden', !hasMessages);
-    if (!hasMessages) {
-      els.messages.innerHTML = '';
-      renderChatList();
+    els.feed.querySelectorAll('.msg, .agent-status').forEach((node) => node.remove());
+    if (!state.messages.length) {
+      els.empty.style.display = 'grid';
+      if (!els.empty.isConnected) els.feed.appendChild(els.empty);
+      renderHistory();
       return;
     }
-    els.messages.innerHTML = state.messages.map((message, index) => {
-      const isUser = message.role === 'user';
-      const avatar = isUser ? escapeHtml((state.user?.displayName || 'Я').slice(0, 1).toUpperCase()) : '✧';
-      const actions = !isUser && message.content ? `<div class="message-actions"><button class="tiny-action" data-copy-index="${index}">Копировать</button></div>` : '';
-      return `<article class="message-row ${isUser ? 'user' : 'assistant'}">
-        ${isUser ? '' : `<div class="message-avatar">${avatar}</div>`}
-        <div class="message-content">
-          <div class="message-role">${isUser ? '' : 'GHOST AI'}</div>
-          <div class="message-text">${message.content ? formatMessage(message.content) : '<span class="typing-dots"><i></i><i></i><i></i></span>'}</div>
-          ${actions}
-        </div>
-        ${isUser ? '' : ''}
-      </article>`;
-    }).join('');
-    renderChatList();
-    els.conversation?.scrollTo?.({ top: els.conversation.scrollHeight, behavior: 'smooth' });
-    const conversation = $('conversation');
-    conversation.scrollTop = conversation.scrollHeight;
+    els.empty.style.display = 'none';
+    state.messages.forEach((message, index) => {
+      const wrap = document.createElement('div');
+      wrap.className = message.role === 'user' ? 'msg user' : 'msg bot';
+      if (message.error) wrap.classList.add('error');
+      if (message.role === 'user') {
+        const bubble = document.createElement('div');
+        bubble.className = 'bubble';
+        bubble.textContent = message.content;
+        wrap.appendChild(bubble);
+      } else {
+        const body = document.createElement('div');
+        body.className = 'body';
+        body.innerHTML = message.content ? formatMessage(message.content) : '';
+        wrap.appendChild(body);
+        if (message.content && !message.error) wrap.appendChild(createActions(message.content, index));
+        if (message.error && message.retry) {
+          const retry = document.createElement('button');
+          retry.className = 'retry';
+          retry.type = 'button';
+          retry.textContent = 'Try again';
+          retry.addEventListener('click', () => retryLast());
+          wrap.appendChild(retry);
+        }
+      }
+      els.feed.appendChild(wrap);
+    });
+    renderHistory();
+    scrollBottom();
   }
+
+  function createActions(text, index) {
+    const actions = document.createElement('div');
+    actions.className = 'actions';
+    actions.innerHTML =
+      '<button type="button" aria-label="Copy" title="Copy"><svg viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M4 16V6a2 2 0 0 1 2-2h10"/></svg></button>' +
+      '<button type="button" aria-label="Speak" title="Speak"><svg viewBox="0 0 24 24"><path d="M4 9v6h3l5 4V5L7 9H4z"/><path d="M16 9a3 3 0 0 1 0 6M18.5 7a6 6 0 0 1 0 10"/></svg></button>';
+    actions.children[0].addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(text); toast('Copied'); }
+      catch { toast('Could not copy'); }
+    });
+    actions.children[1].addEventListener('click', () => {
+      try {
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.lang = navigator.language || 'en-US';
+        speechSynthesis.cancel(); speechSynthesis.speak(utterance);
+      } catch { toast('Speech is unavailable'); }
+    });
+    return actions;
+  }
+
+  function scrollBottom() {
+    requestAnimationFrame(() => { els.feed.scrollTop = els.feed.scrollHeight; });
+  }
+
+  const AgentUI = {
+    el: null, labelEl: null, pendingTimer: null, labelTimer: null, lastAt: 0, lastLabel: '',
+    ensure() {
+      if (this.el?.isConnected) return;
+      const el = document.createElement('div');
+      el.id = 'agentStatus';
+      el.className = 'agent-status';
+      el.innerHTML = '<div class="ghost-mark" aria-hidden="true">' + GHOST_SVG + '</div><div class="agent-label">Thinking…</div>';
+      els.feed.appendChild(el);
+      this.el = el;
+      this.labelEl = el.querySelector('.agent-label');
+    },
+    show(label) {
+      const next = String(label || '').trim();
+      if (!next || next === this.lastLabel) return;
+      clearTimeout(this.pendingTimer);
+      const delay = this.lastAt ? Math.max(0, 400 - (Date.now() - this.lastAt)) : 0;
+      this.pendingTimer = setTimeout(() => {
+        if (!state.loading) return;
+        this.ensure();
+        this.el.classList.add('on');
+        if (this.labelEl.textContent !== next) {
+          clearTimeout(this.labelTimer);
+          this.labelEl.classList.add('swap');
+          this.labelTimer = setTimeout(() => {
+            if (!this.labelEl) return;
+            this.labelEl.textContent = next;
+            this.labelEl.classList.remove('swap');
+          }, 120);
+        }
+        this.lastLabel = next;
+        this.lastAt = Date.now();
+        scrollBottom();
+      }, delay);
+    },
+    hide() {
+      clearTimeout(this.pendingTimer);
+      clearTimeout(this.labelTimer);
+      this.pendingTimer = null;
+      this.labelTimer = null;
+      if (this.el) this.el.classList.remove('on');
+      this.labelEl?.classList.remove('swap');
+      this.lastLabel = '';
+    },
+    reset() { this.hide(); this.lastAt = 0; }
+  };
+
+  const GHOST_SVG = '<svg viewBox="0 0 64 64" fill="none"><path d="M32 6c-11 0-20 9.2-20 22.2V46c0 1.4 1.5 2.3 2.7 1.6L20 44.2l5.2 5.4c.8.8 2 .8 2.8 0L32 45.6l4-4 4 4c.8.8 2 .8 2.8 0l5.2-5.4 5.3 3.4c1.2.7 2.7-.2 2.7-1.6V28.2C56 15.2 47 6 32 6z" fill="#F2F2F4"/><circle cx="24.5" cy="28" r="3.2" fill="#111"/><circle cx="39.5" cy="28" r="3.2" fill="#111"/></svg>';
+
+  // Public event interface: server events drive the indicator; the UI never guesses a stage.
+  window.GhostAgent = {
+    emit(type, payload) {
+      if (type === 'status') AgentUI.show(typeof payload === 'string' ? payload : payload?.label);
+      if (type === 'done' || type === 'error') AgentUI.hide();
+    }
+  };
 
   async function loadChats() {
     if (!state.user || !state.db) return;
@@ -227,63 +306,260 @@
       const snapshot = await state.db.collection('users').doc(state.user.uid)
         .collection('chats').orderBy('updatedAt', 'desc').limit(30).get();
       state.chats = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-      renderChatList();
+      renderHistory();
     } catch (error) {
       console.warn('Chat history unavailable:', error.code || error.message);
-      toast('История чатов пока недоступна. Проверьте правила Firestore.');
+      toast('Chat history is unavailable. Check Firestore rules.');
     }
   }
 
   async function saveActiveChat() {
     if (!state.user || !state.db || !state.activeChatId || !state.messages.length) return;
+    const firstUser = state.messages.find((message) => message.role === 'user')?.content || 'New chat';
+    const title = firstUser.length > 42 ? `${firstUser.slice(0, 42)}…` : firstUser;
+    const payload = {
+      title,
+      messages: state.messages.slice(-24).map((message) => ({ role: message.role, content: String(message.content || '').slice(0, 12000) })),
+      createdAt: state.createdAt || firebase.firestore.FieldValue.serverTimestamp(),
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    };
     try {
-      const ref = state.db.collection('users').doc(state.user.uid).collection('chats').doc(state.activeChatId);
-      const existing = state.chats.find((chat) => chat.id === state.activeChatId);
-      const firstUserMessage = state.messages.find((message) => message.role === 'user')?.content || 'Новый чат';
-      const title = existing?.title || firstUserMessage.slice(0, 52);
-      const payload = {
-        title,
-        messages: state.messages.slice(-24).map((message) => ({ role: message.role, content: message.content.slice(0, 12000) })),
-        updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-      };
-      if (!existing) payload.createdAt = firebase.firestore.FieldValue.serverTimestamp();
-      await ref.set(payload, { merge: true });
-      const update = { id: state.activeChatId, title, ...payload };
-      state.chats = [update, ...state.chats.filter((chat) => chat.id !== state.activeChatId)].slice(0, 30);
-      renderChatList();
+      await state.db.collection('users').doc(state.user.uid).collection('chats').doc(state.activeChatId).set(payload, { merge: true });
+      state.chats = [{ id: state.activeChatId, ...payload }, ...state.chats.filter((chat) => chat.id !== state.activeChatId)].slice(0, 30);
+      renderHistory();
     } catch (error) {
       console.warn('Could not save chat:', error.code || error.message);
-      toast('Не удалось сохранить чат. Проверьте настройки Firestore.');
+      toast('Could not save this chat. Check Firestore rules.');
     }
+  }
+
+  function newChat() {
+    tapHaptic();
+    if (state.loading) stopGeneration();
+    state.activeChatId = null;
+    state.createdAt = null;
+    state.messages = [];
+    AgentUI.reset();
+    renderMessages();
+    closeSide();
+    closeSettings();
+    els.input.focus();
+  }
+
+  async function switchChat(chatId) {
+    const chat = state.chats.find((item) => item.id === chatId);
+    if (!chat) return;
+    if (state.loading) stopGeneration();
+    state.activeChatId = chatId;
+    state.createdAt = chat.createdAt || null;
+    state.messages = Array.isArray(chat.messages) ? chat.messages.map((message) => ({ role: message.role, content: message.content })) : [];
+    AgentUI.reset();
+    renderMessages();
+    closeSide();
+  }
+
+  function setLoading(on) {
+    state.loading = on;
+    els.send.style.display = on ? 'none' : 'grid';
+    els.stop.style.display = on ? 'grid' : 'none';
+  }
+
+  function showErrorMessage(message, isBusy = false) {
+    AgentUI.hide();
+    const assistant = state.messages[state.messages.length - 1];
+    const text = isBusy ? 'Server is full right now. Please wait and try again in 2.5 minutes.' : message;
+    if (assistant?.role === 'assistant') {
+      if (!assistant.content) assistant.content = text;
+      assistant.error = true;
+      assistant.retry = true;
+    } else {
+      state.messages.push({ role: 'assistant', content: text, error: true, retry: true });
+    }
+    renderMessages();
+  }
+
+  function retryLast() {
+    if (Date.now() < state.cooldownUntil) {
+      toast(`Wait ${Math.ceil((state.cooldownUntil - Date.now()) / 1000)}s`);
+      return;
+    }
+    const lastAssistant = state.messages[state.messages.length - 1];
+    if (lastAssistant?.role === 'assistant' && lastAssistant.error) state.messages.pop();
+    const lastUser = state.messages[state.messages.length - 1];
+    if (!lastUser || lastUser.role !== 'user') return;
+    const retryText = lastUser.content;
+    state.messages.pop();
+    renderMessages();
+    sendMessage(retryText);
+  }
+
+  function handlePacket(packet, requestId) {
+    if (requestId !== state.requestSeq || !packet || typeof packet !== 'object') return;
+    if (packet.type === 'status') {
+      window.GhostAgent.emit('status', packet.label || packet.stage || 'Thinking…');
+    } else if (packet.type === 'token') {
+      AgentUI.hide();
+      if (typeof packet.text === 'string' && packet.text) {
+        state.streamText += packet.text;
+        const assistant = state.messages[state.messages.length - 1];
+        if (assistant?.role === 'assistant') assistant.content = state.streamText;
+        if (state.streamBody) state.streamBody.textContent += packet.text;
+        scrollBottom();
+      }
+    } else if (packet.type === 'done') {
+      window.GhostAgent.emit('done');
+    } else if (packet.type === 'error') {
+      window.GhostAgent.emit('error');
+      const error = new Error(packet.message || 'The server could not complete the request.');
+      error.code = packet.code || 'server_error';
+      error.retryAfterSec = Number(packet.retryAfterSec) || 0;
+      throw error;
+    }
+  }
+
+  async function sendMessage(rawText) {
+    const text = String(rawText || '').trim();
+    if (!text || state.loading) return;
+    tapHaptic();
+    if (!state.user) { openAuth('login'); toast('Sign in to start a chat.'); return; }
+    if (Date.now() < state.cooldownUntil) {
+      toast(`Server is full — wait ${Math.ceil((state.cooldownUntil - Date.now()) / 1000)}s`);
+      return;
+    }
+    if (voiceListening && voiceRecognition) { try { voiceRecognition.stop(); } catch {} }
+    if (!state.activeChatId) state.activeChatId = crypto.randomUUID();
+    state.createdAt = state.createdAt || new Date();
+    state.messages.push({ role: 'user', content: text });
+    state.messages = state.messages.slice(-24);
+    if (state.messages[0]?.role === 'assistant') state.messages.shift();
+    state.streamText = '';
+    const requestId = ++state.requestSeq;
+    renderMessages();
+    els.input.value = '';
+    autoSize();
+    setLoading(true);
+    AgentUI.reset();
+    const controller = new AbortController();
+    state.controller = controller;
+    state.messages.push({ role: 'assistant', content: '' });
+    renderMessages();
+    state.streamBody = els.feed.querySelector('.msg.bot:last-of-type .body');
+
+    try {
+      const token = await state.user.getIdToken();
+      const contextMessages = state.messages.slice(0, -1).slice(-23);
+      if (contextMessages[0]?.role === 'assistant') contextMessages.shift();
+      const response = await fetch(`${apiBase}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ messages: contextMessages }),
+        signal: controller.signal
+      });
+
+      if (!response.ok) {
+        let payload = {};
+        try { payload = await response.json(); } catch {}
+        const error = new Error(payload.message || payload.error || `Server error (${response.status})`);
+        error.code = payload.code || (response.status === 429 ? 'busy' : 'http_error');
+        error.retryAfterSec = Number(payload.retryAfterSec) || (response.status === 429 ? 150 : 0);
+        throw error;
+      }
+      if (!response.body) throw new Error('This browser does not support streamed responses.');
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let receivedDone = false;
+      const processFrame = (frame) => {
+        const data = frame.split(/\r?\n/).filter((line) => line.startsWith('data:')).map((line) => line.slice(5).trim()).join('\n');
+        if (!data) return;
+        try {
+          const packet = JSON.parse(data);
+          if (requestId !== state.requestSeq) return;
+          if (packet.type === 'done') receivedDone = true;
+          handlePacket(packet, requestId);
+        } catch (error) {
+          if (error instanceof SyntaxError) return;
+          throw error;
+        }
+      };
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const frames = buffer.split(/\r?\n\r?\n/);
+        buffer = frames.pop() || '';
+        frames.forEach(processFrame);
+      }
+      buffer += decoder.decode();
+      if (buffer.trim()) processFrame(buffer);
+      if (!receivedDone && state.streamText.trim()) window.GhostAgent.emit('done');
+      if (!state.streamText.trim()) {
+        const assistant = state.messages[state.messages.length - 1];
+        if (assistant?.role === 'assistant' && !assistant.error) assistant.content = 'The model returned an empty response. Please try again.';
+      }
+      await saveActiveChat();
+    } catch (error) {
+      if (requestId !== state.requestSeq) return;
+      if (error.name === 'AbortError') {
+        window.GhostAgent.emit('done');
+        const assistant = state.messages[state.messages.length - 1];
+        if (assistant?.role === 'assistant' && !assistant.content) state.messages.pop();
+      } else {
+        console.error('Ghost AI stream error:', error.code || error.message);
+        const busy = error.code === 'busy' || error.retryAfterSec > 0;
+        if (busy) state.cooldownUntil = Date.now() + (error.retryAfterSec || 150) * 1000;
+        showErrorMessage(error.message || 'The response failed.', busy);
+        toast(busy ? 'Server is full — wait 2.5 min' : 'Could not get a response.');
+      }
+      await saveActiveChat();
+    } finally {
+      if (requestId === state.requestSeq) {
+        window.GhostAgent.emit('done');
+        state.controller = null;
+        state.streamBody = null;
+        setLoading(false);
+        renderMessages();
+        els.input.focus();
+      }
+    }
+  }
+
+  function stopGeneration() {
+    state.requestSeq += 1;
+    if (state.controller) state.controller.abort();
+    state.controller = null;
+    window.GhostAgent.emit('done');
+    const assistant = state.messages[state.messages.length - 1];
+    if (assistant?.role === 'assistant' && !assistant.content) assistant.content = 'Generation stopped.';
+    setLoading(false);
+    state.streamBody = null;
+    renderMessages();
+    saveActiveChat();
+  }
+
+  function autoSize() {
+    els.input.style.height = 'auto';
+    els.input.style.height = `${Math.min(els.input.scrollHeight, 110)}px`;
   }
 
   function openAuth(mode = 'login') {
-    if (!state.auth) {
-      toast('Firebase не загрузился. Проверьте настройки проекта.');
-      return;
-    }
+    if (!state.auth) { toast('Firebase did not load. Check the project configuration.'); return; }
     setAuthMode(mode);
     els.authOverlay.classList.remove('hidden');
-    document.body.classList.add('auth-open');
     setTimeout(() => (mode === 'register' ? els.authName : els.authEmail).focus(), 30);
   }
-
-  function closeAuth() {
-    els.authOverlay.classList.add('hidden');
-    document.body.classList.remove('auth-open');
-    els.authError.textContent = '';
-  }
-
+  function closeAuth() { els.authOverlay.classList.add('hidden'); els.authError.textContent = ''; }
   function setAuthMode(mode) {
     state.authMode = mode;
     const registering = mode === 'register';
-    els.authTitle.textContent = registering ? 'Создать аккаунт' : 'С возвращением';
-    els.authSubtitle.textContent = registering ? 'Зарегистрируйтесь, чтобы сохранять свои чаты.' : 'Войдите, чтобы продолжить общение с Ghost AI.';
+    els.authTitle.textContent = registering ? 'Create account' : 'Welcome back';
+    els.authSubtitle.textContent = registering ? 'Register to save your chats.' : 'Sign in to continue using Ghost AI.';
     els.authName.classList.toggle('hidden', !registering);
     els.authNameLabel.classList.toggle('hidden', !registering);
     els.authName.required = registering;
     els.authPassword.autocomplete = registering ? 'new-password' : 'current-password';
-    els.authSubmit.textContent = registering ? 'Создать аккаунт' : 'Войти';
+    els.authSubmit.textContent = registering ? 'Create account' : 'Sign in';
     els.authForgot.classList.toggle('hidden', registering);
     els.loginTab.classList.toggle('active', !registering);
     els.registerTab.classList.toggle('active', registering);
@@ -294,207 +570,73 @@
 
   function authErrorMessage(error) {
     const messages = {
-      'auth/invalid-email': 'Проверьте правильность адреса электронной почты.',
-      'auth/user-not-found': 'Аккаунт с такой почтой не найден. Зарегистрируйтесь.',
-      'auth/wrong-password': 'Неверный пароль. Попробуйте ещё раз.',
-      'auth/invalid-credential': 'Неверная почта или пароль.',
-      'auth/email-already-in-use': 'Эта почта уже зарегистрирована. Перейдите во вкладку «Вход».',
-      'auth/weak-password': 'Пароль слишком простой. Используйте не менее 6 символов.',
-      'auth/too-many-requests': 'Слишком много попыток. Попробуйте позже.',
-      'auth/network-request-failed': 'Нет соединения. Проверьте интернет.',
-      'auth/operation-not-allowed': 'Этот способ входа не включён в Firebase Authentication.',
-      'auth/unauthorized-domain': 'Домен сайта не добавлен в Firebase → Authentication → Settings → Authorized domains.',
-      'auth/api-key-not-valid': 'Firebase API-ключ в config.js неверный. Проверьте, что опубликован последний ZIP с исправленным config.js.',
-      'auth/popup-closed-by-user': 'Окно входа закрыто. Попробуйте ещё раз.'
+      'auth/invalid-email': 'Check the email address.',
+      'auth/user-not-found': 'No account found with this email. Register first.',
+      'auth/wrong-password': 'Incorrect password.',
+      'auth/invalid-credential': 'Incorrect email or password.',
+      'auth/email-already-in-use': 'This email is already registered. Choose Sign in.',
+      'auth/weak-password': 'Use a password with at least 6 characters.',
+      'auth/too-many-requests': 'Too many attempts. Try again later.',
+      'auth/network-request-failed': 'No connection. Check your internet.',
+      'auth/operation-not-allowed': 'Enable this sign-in method in Firebase Authentication.',
+      'auth/unauthorized-domain': 'Add this domain in Firebase Authorized domains.',
+      'auth/popup-closed-by-user': 'The sign-in window was closed.'
     };
-    return messages[error?.code] || `Не удалось выполнить вход (${error?.code || 'unknown'}). Проверьте настройки Firebase.`;
-  }
-
-  async function signInWithGoogle() {
-    if (!state.auth) return openAuth('login');
-    const provider = new firebase.auth.GoogleAuthProvider();
-    provider.setCustomParameters({ prompt: 'select_account' });
-    provider.addScope('email');
-    provider.addScope('profile');
-    try {
-      const result = await state.auth.signInWithPopup(provider);
-      if (result.user) closeAuth();
-    } catch (error) {
-      if (error.code === 'auth/popup-blocked' || error.code === 'auth/cancelled-popup-request' || error.code === 'auth/operation-not-supported-in-this-environment') {
-        try { await state.auth.signInWithRedirect(provider); return; }
-        catch (redirectError) { error = redirectError; }
-      }
-      console.error('Google sign-in:', error.code || error.message);
-      els.authError.textContent = authErrorMessage(error);
-    }
+    return messages[error?.code] || `Sign-in failed (${error?.code || 'unknown'}).`;
   }
 
   async function submitAuth(event) {
     event.preventDefault();
-    if (!state.auth) return;
     const email = els.authEmail.value.trim();
     const password = els.authPassword.value;
     const registering = state.authMode === 'register';
     els.authSubmit.disabled = true;
-    els.authSubmit.textContent = registering ? 'Создаём аккаунт…' : 'Входим…';
     els.authError.textContent = '';
     try {
       if (registering) {
+        const credential = await state.auth.createUserWithEmailAndPassword(email, password);
         const name = els.authName.value.trim();
-        const result = await state.auth.createUserWithEmailAndPassword(email, password);
-        if (name) await result.user.updateProfile({ displayName: name });
+        if (name) await credential.user.updateProfile({ displayName: name });
         closeAuth();
-        toast('Аккаунт создан. Добро пожаловать в Ghost AI!');
+        toast('Account created. Welcome to Ghost AI.');
       } else {
         await state.auth.signInWithEmailAndPassword(email, password);
         closeAuth();
-        toast('Вы вошли в Ghost AI.');
+        toast('Signed in.');
       }
     } catch (error) {
-      console.error('Email authentication:', error.code || error.message);
       els.authError.textContent = authErrorMessage(error);
     } finally {
       els.authSubmit.disabled = false;
-      els.authSubmit.textContent = registering ? 'Создать аккаунт' : 'Войти';
+      els.authSubmit.textContent = registering ? 'Create account' : 'Sign in';
+    }
+  }
+
+  async function signInWithGoogle() {
+    const provider = new firebase.auth.GoogleAuthProvider();
+    provider.setCustomParameters({ prompt: 'select_account' });
+    try {
+      await state.auth.signInWithPopup(provider);
+      closeAuth();
+    } catch (error) {
+      if (['auth/popup-blocked', 'auth/cancelled-popup-request', 'auth/operation-not-supported-in-this-environment'].includes(error.code)) {
+        try { await state.auth.signInWithRedirect(provider); return; } catch (redirectError) { error = redirectError; }
+      }
+      els.authError.textContent = authErrorMessage(error);
     }
   }
 
   async function resetPassword() {
     const email = els.authEmail.value.trim();
-    if (!email) {
-      els.authError.textContent = 'Сначала введите свою электронную почту.';
-      els.authEmail.focus();
-      return;
-    }
-    try {
-      await state.auth.sendPasswordResetEmail(email);
-      els.authError.textContent = 'Письмо для сброса пароля отправлено. Проверьте почту.';
-    } catch (error) {
-      els.authError.textContent = authErrorMessage(error);
-    }
-  }
-
-  async function switchChat(chatId) {
-    const chat = state.chats.find((item) => item.id === chatId);
-    if (!chat) return;
-    if (state.loading) stopGeneration();
-    state.activeChatId = chatId;
-    state.createdAt = chat.createdAt || null;
-    state.messages = Array.isArray(chat.messages) ? chat.messages.map((m) => ({ role: m.role, content: m.content })) : [];
-    renderMessages();
-    closeSidebar();
-  }
-
-  function setLoading(value) {
-    state.loading = value;
-    els.sendBtn.disabled = value;
-    els.messageInput.disabled = value;
-    els.stopBtn.classList.toggle('hidden', !value);
-    els.sendBtn.classList.toggle('hidden', value);
-  }
-
-  function stopGeneration() {
-    if (state.controller) state.controller.abort();
-    state.controller = null;
-    setLoading(false);
-    saveActiveChat();
-    renderMessages();
-  }
-
-  async function sendMessage(text) {
-    if (!text || state.loading) return;
-    if (!state.user) {
-      toast('Сначала войдите в Ghost AI.');
-      return openAuth('login');
-    }
-    if (!state.activeChatId) state.activeChatId = crypto.randomUUID();
-    state.messages.push({ role: 'user', content: text });
-    state.messages = state.messages.slice(-24);
-    if (state.messages[0]?.role === 'assistant') state.messages.shift();
-    renderMessages();
-    els.messageInput.value = '';
-    resizeInput();
-    setLoading(true);
-    state.controller = new AbortController();
-    state.messages.push({ role: 'assistant', content: '' });
-    renderMessages();
-
-    try {
-      const token = await state.user.getIdToken();
-      const contextMessages = state.messages.slice(0, -1).slice(-23);
-      if (contextMessages[0]?.role === 'assistant') contextMessages.shift();
-      const response = await fetch(`${apiBase}/api/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ messages: contextMessages }),
-        signal: state.controller.signal
-      });
-      if (!response.ok) {
-        let payload = {};
-        try { payload = await response.json(); } catch { /* no JSON response */ }
-        throw new Error(payload.error || `Ошибка сервера (${response.status})`);
-      }
-      if (!response.body) throw new Error('Браузер не поддерживает потоковый ответ.');
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-      let assistantText = '';
-      const processLine = (line) => {
-        if (!line.startsWith('data:')) return;
-        const raw = line.slice(5).trim();
-        if (!raw) return;
-        let packet;
-        try { packet = JSON.parse(raw); } catch { return; }
-        if (packet.error) throw new Error(packet.error);
-        if (typeof packet.content === 'string') {
-          assistantText += packet.content;
-          state.messages[state.messages.length - 1].content = assistantText;
-          renderMessages();
-        }
-      };
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split(/\r?\n/);
-        buffer = lines.pop() || '';
-        for (const line of lines) processLine(line);
-      }
-      buffer += decoder.decode();
-      if (buffer) processLine(buffer);
-      if (!assistantText.trim()) state.messages[state.messages.length - 1].content = 'Я не получил текстовый ответ. Попробуйте ещё раз.';
-      await saveActiveChat();
-    } catch (error) {
-      if (error.name === 'AbortError') {
-        if (!state.messages[state.messages.length - 1]?.content) state.messages.pop();
-      } else {
-        console.error('Ghost AI chat error:', error.message);
-        if (state.messages[state.messages.length - 1]?.role === 'assistant' && !state.messages[state.messages.length - 1].content) {
-          state.messages[state.messages.length - 1].content = `Не удалось получить ответ: ${error.message}`;
-        } else {
-          state.messages.push({ role: 'assistant', content: `Не удалось получить ответ: ${error.message}` });
-        }
-        toast('Не удалось получить ответ.');
-      }
-      await saveActiveChat();
-    } finally {
-      state.controller = null;
-      setLoading(false);
-      renderMessages();
-      els.messageInput.focus();
-    }
-  }
-
-  function resizeInput() {
-    els.messageInput.style.height = 'auto';
-    els.messageInput.style.height = `${Math.min(els.messageInput.scrollHeight, 170)}px`;
+    if (!email) { els.authError.textContent = 'Enter your email first.'; els.authEmail.focus(); return; }
+    try { await state.auth.sendPasswordResetEmail(email); els.authError.textContent = 'Password reset email sent.'; }
+    catch (error) { els.authError.textContent = authErrorMessage(error); }
   }
 
   async function initializeFirebase() {
     const cfg = config.firebase;
-    if (!cfg || !cfg.apiKey || !cfg.projectId || !window.firebase) {
-      updateAuthUI(null);
-      toast('Firebase не загрузился. Проверьте подключение и public/config.js.');
+    if (!cfg?.apiKey || !cfg?.projectId || !window.firebase) {
+      toast('Firebase did not load. Check config.js.');
       return;
     }
     try {
@@ -502,147 +644,119 @@
       state.auth = app.auth();
       state.db = app.firestore();
       await state.auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);
-      state.auth.getRedirectResult().catch((error) => {
-        if (error) console.warn('Redirect sign-in:', error.code || error.message);
-      });
+      state.auth.getRedirectResult().catch(() => {});
       state.auth.onAuthStateChanged(async (user) => {
         updateAuthUI(user);
         if (user) await loadChats();
-        else {
-          state.chats = [];
-          renderChatList();
-        }
+        else { state.chats = []; renderHistory(); }
       });
     } catch (error) {
       console.error('Firebase init:', error.code || error.message);
-      toast('Ошибка инициализации Firebase. Проверьте настройки проекта.');
-      updateAuthUI(null);
+      toast('Firebase initialization failed.');
     }
   }
 
-  els.signInBtn.addEventListener('click', () => openAuth('login'));
-  els.authClose.addEventListener('click', closeAuth);
-  els.authOverlay.addEventListener('click', (event) => { if (event.target === els.authOverlay) closeAuth(); });
-  els.loginTab.addEventListener('click', () => setAuthMode('login'));
-  els.registerTab.addEventListener('click', () => setAuthMode('register'));
-  els.authForm.addEventListener('submit', submitAuth);
-  els.authGoogle.addEventListener('click', signInWithGoogle);
-  els.authForgot.addEventListener('click', resetPassword);
-  document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') {
-      closeAuth(); closeOverlay(els.profileOverlay); closeOverlay(els.settingsOverlay); closeOverlay(els.searchOverlay); closeSidebar();
-    }
+  // Primary navigation and composer.
+  els.menu.onclick = openSide;
+  els.scrim.onclick = closeSide;
+  $('btnSideNew').onclick = newChat;
+  $('btnSettingsBack').onclick = closeSettings;
+  els.openSettings.onclick = openSettings;
+  els.openProfile.onclick = openProfile;
+  els.openAuth.onclick = () => state.user ? state.auth.signOut().then(() => { newChat(); toast('Signed out.'); }) : openAuth('login');
+  $('btnProfile').onclick = openProfile;
+  $('btnAuth').onclick = () => state.user ? state.auth.signOut().then(() => toast('Signed out.')) : openAuth('login');
+  els.history.addEventListener('click', (event) => {
+    const item = event.target.closest('[data-chat-id]');
+    if (item) switchChat(item.dataset.chatId);
   });
-  els.signOutBtn.addEventListener('click', async () => {
-    try { await state.auth.signOut(); newChat(); toast('Вы вышли из аккаунта.'); }
-    catch { toast('Не удалось выйти из аккаунта.'); }
-  });
-  els.newChatBtn.addEventListener('click', newChat);
-  els.mobileNewChat.addEventListener('click', newChat);
-  els.menuBtn.addEventListener('click', openSidebar);
-  els.closeSidebar.addEventListener('click', closeSidebar);
-  els.sidebarBackdrop.addEventListener('click', closeSidebar);
-  els.chatList.addEventListener('click', (event) => {
-    const button = event.target.closest('[data-chat-id]');
-    if (button) switchChat(button.dataset.chatId);
-  });
-  els.messages.addEventListener('click', async (event) => {
-    const button = event.target.closest('[data-copy-index]');
-    if (!button) return;
-    const message = state.messages[Number(button.dataset.copyIndex)];
-    if (!message) return;
-    try { await navigator.clipboard.writeText(message.content); toast('Ответ скопирован.'); }
-    catch { toast('Не удалось скопировать текст.'); }
-  });
-  els.composerForm.addEventListener('submit', (event) => {
-    event.preventDefault();
-    sendMessage(els.messageInput.value.trim());
-  });
-  els.messageInput.addEventListener('input', resizeInput);
-  els.messageInput.addEventListener('keydown', (event) => {
+  els.send.onclick = () => sendMessage(els.input.value);
+  els.stop.onclick = stopGeneration;
+  els.input.addEventListener('input', autoSize);
+  els.input.addEventListener('keydown', (event) => {
     const shouldSend = event.key === 'Enter' && (preferences.enterToSend ? !event.shiftKey : event.ctrlKey);
-    if (shouldSend) {
-      event.preventDefault();
-      els.composerForm.requestSubmit();
-    }
+    if (shouldSend) { event.preventDefault(); sendMessage(els.input.value); }
   });
-  els.stopBtn.addEventListener('click', stopGeneration);
 
-  // Profile, settings and planned web-search screen.
-  els.sideProfileBtn.addEventListener('click', openProfile);
-  els.sideSettingsBtn.addEventListener('click', openSettings);
-  els.accountRow.addEventListener('click', (event) => { if (!event.target.closest('#signOutBtn')) openProfile(); });
-  els.profileClose.addEventListener('click', () => closeOverlay(els.profileOverlay));
-  els.settingsClose.addEventListener('click', () => closeOverlay(els.settingsOverlay));
-  els.searchClose.addEventListener('click', () => closeOverlay(els.searchOverlay));
-  els.searchCloseAction.addEventListener('click', () => closeOverlay(els.searchOverlay));
-  [els.profileOverlay, els.settingsOverlay, els.searchOverlay].forEach((overlay) => {
-    overlay.addEventListener('click', (event) => { if (event.target === overlay) closeOverlay(overlay); });
-  });
-  els.profileSaveBtn.addEventListener('click', async () => {
+  // Search remains a visual control only until a real search tool is connected.
+  els.search.onclick = () => {
+    tapHaptic();
+    els.search.classList.toggle('active');
+    toast('Search tool is not connected yet.');
+  };
+  $('btnAttach').onclick = () => toast('Attachments are not connected yet.');
+
+  // Settings.
+  els.setHaptic.onclick = () => {
+    preferences.haptics = !preferences.haptics;
+    savePreferences();
+    tapHaptic();
+  };
+  els.setEnter.onclick = () => { preferences.enterToSend = !preferences.enterToSend; savePreferences(); };
+  els.setAnimations.onclick = () => { preferences.animations = !preferences.animations; savePreferences(); };
+
+  // Authentication and profile dialogs.
+  els.authClose.onclick = closeAuth;
+  els.authOverlay.addEventListener('click', (event) => { if (event.target === els.authOverlay) closeAuth(); });
+  els.loginTab.onclick = () => setAuthMode('login');
+  els.registerTab.onclick = () => setAuthMode('register');
+  els.authForm.addEventListener('submit', submitAuth);
+  els.authGoogle.onclick = signInWithGoogle;
+  els.authForgot.onclick = resetPassword;
+  els.profileClose.onclick = closeProfile;
+  els.profileOverlay.addEventListener('click', (event) => { if (event.target === els.profileOverlay) closeProfile(); });
+  els.profileSaveBtn.onclick = async () => {
     if (!state.user) return openAuth('login');
     const displayName = els.profileNameInput.value.trim();
-    if (!displayName) { els.profileError.textContent = 'Введите имя профиля.'; return; }
+    if (!displayName) { els.profileError.textContent = 'Enter a display name.'; return; }
     els.profileSaveBtn.disabled = true;
     els.profileError.textContent = '';
     try {
       await state.user.updateProfile({ displayName });
       updateAuthUI(state.auth.currentUser || state.user);
-      toast('Профиль обновлён.');
-      closeOverlay(els.profileOverlay);
-    } catch (error) {
-      console.warn('Profile update:', error.code || error.message);
-      els.profileError.textContent = 'Не удалось сохранить имя. Попробуйте ещё раз.';
-    } finally { els.profileSaveBtn.disabled = false; }
+      closeProfile();
+      toast('Profile updated.');
+    } catch { els.profileError.textContent = 'Could not save the profile name.'; }
+    finally { els.profileSaveBtn.disabled = false; }
+  };
+  els.profileSignoutBtn.onclick = async () => {
+    try { await state.auth.signOut(); closeProfile(); newChat(); toast('Signed out.'); }
+    catch { els.profileError.textContent = 'Could not sign out.'; }
+  };
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') { closeAuth(); closeProfile(); closeSide(); closeSettings(); }
   });
-  els.profileSignoutBtn.addEventListener('click', async () => {
-    if (!state.auth) return;
-    try { await state.auth.signOut(); newChat(); closeOverlay(els.profileOverlay); toast('Вы вышли из аккаунта.'); }
-    catch { els.profileError.textContent = 'Не удалось выйти из аккаунта.'; }
-  });
-  els.settingLightTheme.addEventListener('change', () => { preferences.lightTheme = els.settingLightTheme.checked; savePreferences(); });
-  els.settingEnterSend.addEventListener('change', () => { preferences.enterToSend = els.settingEnterSend.checked; savePreferences(); toast(preferences.enterToSend ? 'Enter отправляет сообщение.' : 'Для отправки используйте Ctrl + Enter.'); });
-  els.settingAnimations.addEventListener('change', () => { preferences.animations = els.settingAnimations.checked; savePreferences(); });
-  els.searchBtn.addEventListener('click', openSearch);
 
-  // Speech-to-text is browser-dependent; gracefully explain when unavailable.
+  // Speech-to-text is enabled only when the browser supports it.
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (SpeechRecognition) {
     voiceRecognition = new SpeechRecognition();
     voiceRecognition.continuous = false;
     voiceRecognition.interimResults = true;
-    voiceRecognition.lang = /ru/i.test(navigator.language || '') ? 'ru-RU' : (navigator.language || 'en-US');
-    voiceRecognition.onstart = () => { voiceListening = true; els.micBtn.classList.add('listening'); };
-    voiceRecognition.onend = () => { voiceListening = false; els.micBtn.classList.remove('listening'); };
-    voiceRecognition.onerror = (event) => { voiceListening = false; els.micBtn.classList.remove('listening'); toast(event.error === 'not-allowed' ? 'Разрешите доступ к микрофону.' : 'Голосовой ввод не сработал.'); };
+    voiceRecognition.lang = navigator.language || 'en-US';
+    voiceRecognition.onstart = () => { voiceListening = true; els.mic.classList.add('listening'); };
+    voiceRecognition.onend = () => { voiceListening = false; els.mic.classList.remove('listening'); };
+    voiceRecognition.onerror = (event) => {
+      voiceListening = false; els.mic.classList.remove('listening');
+      toast(event.error === 'not-allowed' ? 'Microphone permission denied.' : 'Voice input failed.');
+    };
     voiceRecognition.onresult = (event) => {
-      let transcript = '';
-      for (let index = event.resultIndex; index < event.results.length; index++) transcript += event.results[index][0].transcript;
-      if (transcript) { els.messageInput.value = `${els.messageInput.value}${els.messageInput.value ? ' ' : ''}${transcript.trim()}`; resizeInput(); }
+      let text = '';
+      for (let i = event.resultIndex; i < event.results.length; i++) text += event.results[i][0].transcript;
+      if (text) { els.input.value = `${els.input.value}${els.input.value ? ' ' : ''}${text.trim()}`; autoSize(); }
     };
   }
-  els.micBtn.addEventListener('click', () => {
-    if (!voiceRecognition) { toast('Голосовой ввод не поддерживается этим браузером.'); return; }
-    if (voiceListening) { try { voiceRecognition.stop(); } catch {} return; }
-    try { voiceRecognition.start(); } catch { toast('Не удалось запустить микрофон.'); }
-  });
-
-  document.querySelectorAll('[data-prompt]').forEach((button) => {
-    button.addEventListener('click', () => {
-      els.messageInput.value = button.dataset.prompt || '';
-      resizeInput();
-      if (state.user) els.composerForm.requestSubmit(); else openAuth('login');
-    });
-  });
-
-  // Keep the health check separate from authentication; it never exposes secrets.
-  fetch(`${apiBase}/api/health`).then((response) => response.json()).then((health) => {
-    if (!health.nvidiaConfigured) toast('Сервер запущен, но NVIDIA_API_KEY ещё не добавлен.');
-  }).catch(() => {
-    console.info('Ghost AI API health check unavailable.');
-  });
+  els.mic.onclick = () => {
+    tapHaptic();
+    if (!voiceRecognition) { toast('Voice input is not supported in this browser.'); return; }
+    if (voiceListening) { try { voiceRecognition.stop(); } catch {} }
+    else { try { voiceRecognition.start(); } catch { toast('Could not start the microphone.'); } }
+  };
 
   applyPreferences();
-  renderChatList();
+  renderHistory();
   initializeFirebase();
+  fetch(`${apiBase}/api/health`).then((response) => response.json()).then((health) => {
+    if (!health.nvidiaConfigured) toast('Add NVIDIA_API_KEY in Cloudflare settings.');
+  }).catch(() => console.info('Ghost AI health check unavailable.'));
 })();

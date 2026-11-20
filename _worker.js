@@ -98,103 +98,169 @@ function rateAllowed(uid, env) {
   current.count += 1;
   return true;
 }
-function streamNvidia(upstream) {
+function streamNvidia(request, messages, nvidiaApiKey) {
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
-  let buffer = "";
-  let closed = false;
+  const aborter = new AbortController();
+  let cancelled = false;
+  let upstreamReader = null;
+  const abortFromRequest = () => aborter.abort();
+  request.signal.addEventListener("abort", abortFromRequest, { once: true });
+
   return new ReadableStream({
     async start(controller) {
-      const send = obj => controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`));
-      const parseLine = line => {
-        if (!line.startsWith("data:")) return;
-        const raw = line.slice(5).trim();
-        if (!raw || raw === "[DONE]") return;
-        try {
-          const packet = JSON.parse(raw);
-          const delta = packet.choices?.[0]?.delta;
-          if (typeof delta?.content === "string" && delta.content) send({ content: delta.content });
-        } catch { /* ignore provider keepalive/non-JSON lines */ }
+      const send = (packet) => {
+        if (!cancelled) controller.enqueue(encoder.encode(`data: ${JSON.stringify(packet)}\n\n`));
+      };
+      const sendError = (code, message, retryAfterSec) => {
+        const packet = { type: "error", code, message };
+        if (retryAfterSec) packet.retryAfterSec = retryAfterSec;
+        send(packet);
       };
       try {
-        const reader = upstream.body.getReader();
-        while (!closed) {
-          const { value, done } = await reader.read();
+        // This is a real server-side event: the request is now being sent to NVIDIA.
+        send({ type: "status", stage: "thinking", label: "Thinking…" });
+        const upstream = await fetch(NVIDIA_URL, {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${nvidiaApiKey}`,
+            accept: "text/event-stream",
+            "content-type": "application/json"
+          },
+          body: JSON.stringify({
+            model: MODEL,
+            messages,
+            temperature: 1,
+            top_p: 0.95,
+            max_tokens: 16384,
+            chat_template_kwargs: { enable_thinking: true },
+            stream: true
+          }),
+          signal: aborter.signal
+        });
+
+        if (!upstream.ok) {
+          let detail = "";
+          try { detail = (await upstream.text()).slice(0, 500); } catch {}
+          console.error("NVIDIA API error", upstream.status, detail);
+          if (upstream.status === 429 || upstream.status === 503) {
+            sendError("busy", "Server is full right now. Please wait and try again in 2.5 minutes.", 150);
+          } else if (upstream.status === 401) {
+            sendError("upstream_auth", "NVIDIA rejected the API key. Check the Cloudflare secret.");
+          } else {
+            sendError("upstream_error", "NVIDIA could not complete the request. Please try again later.");
+          }
+          return;
+        }
+        if (!upstream.body) {
+          sendError("empty_stream", "NVIDIA returned an empty response stream.");
+          return;
+        }
+
+        upstreamReader = upstream.body.getReader();
+        let buffer = "";
+        let reasoningReported = false;
+        let providerFinished = false;
+        const parseLine = (line) => {
+          if (!line.startsWith("data:")) return;
+          const raw = line.slice(5).trim();
+          if (!raw) return;
+          if (raw === "[DONE]") { providerFinished = true; return; }
+          try {
+            const packet = JSON.parse(raw);
+            const delta = packet.choices?.[0]?.delta;
+            // Reasoning text itself is never forwarded to the client. Only its real lifecycle is shown.
+            const hasReasoning = (typeof delta?.reasoning_content === "string" && delta.reasoning_content) ||
+              (typeof delta?.reasoning === "string" && delta.reasoning);
+            if (hasReasoning && !reasoningReported) {
+              reasoningReported = true;
+              send({ type: "status", stage: "reasoning", label: "Reasoning…" });
+            }
+            if (typeof delta?.content === "string" && delta.content) {
+              send({ type: "token", text: delta.content });
+            }
+          } catch {
+            // Ignore provider keepalive or non-JSON lines.
+          }
+        };
+
+        while (!cancelled) {
+          const { value, done } = await upstreamReader.read();
           if (done) break;
           buffer += decoder.decode(value, { stream: true });
           const lines = buffer.split(/\r?\n/);
           buffer = lines.pop() || "";
-          lines.forEach(parseLine);
+          for (const line of lines) {
+            parseLine(line);
+            if (providerFinished) break;
+          }
+          if (providerFinished) break;
         }
         buffer += decoder.decode();
-        if (buffer) parseLine(buffer);
-        send({ done: true });
-      } catch {
-        send({ error: "Поток ответа прервался. Попробуйте ещё раз." });
+        if (buffer && !providerFinished) parseLine(buffer);
+        if (!cancelled && !aborter.signal.aborted) send({ type: "done" });
+      } catch (error) {
+        if (!cancelled && !aborter.signal.aborted) {
+          console.error("NVIDIA stream failed", error?.message || error);
+          sendError("stream_error", "The response stream was interrupted. Please try again.");
+        }
       } finally {
-        controller.close();
+        request.signal.removeEventListener("abort", abortFromRequest);
+        try { upstreamReader?.releaseLock(); } catch {}
+        if (!cancelled) controller.close();
       }
     },
-    cancel() { closed = true; }
-  });
-}
-async function handleChat(request, env) {
-  const nvidiaApiKey = getNvidiaApiKey(env);
-  if (!nvidiaApiKey) return json({ error: "Cloudflare не передал секрет NVIDIA_API_KEY в текущий deployment. Проверьте, что Secret добавлен для Production, затем создайте новый deployment." }, 503);
-  const firebaseProjectId = getFirebaseProjectId(env);
-  const bearer = request.headers.get("authorization") || "";
-  const token = bearer.match(/^Bearer\s+(.+)$/i)?.[1];
-  if (!token) return json({ error: "Войдите через Google, чтобы начать чат." }, 401);
-  let user;
-  try { user = await verifyFirebaseToken(token, firebaseProjectId); }
-  catch { return json({ error: "Не удалось проверить вход. Войдите в аккаунт ещё раз." }, 401); }
-  if (!rateAllowed(user.uid, env)) return json({ error: "Слишком много запросов. Попробуйте немного позже." }, 429);
-  let body;
-  try {
-    const text = await request.text();
-    if (text.length > MAX_BODY) return json({ error: "Слишком большой запрос." }, 413);
-    body = JSON.parse(text);
-  } catch { return json({ error: "Некорректный JSON." }, 400); }
-  const messages = validateMessages(body.messages);
-  if (!messages) return json({ error: "Проверьте формат сообщения и попробуйте ещё раз." }, 400);
-  let upstream;
-  try {
-    upstream = await fetch(NVIDIA_URL, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${nvidiaApiKey}`,
-        accept: "text/event-stream",
-        "content-type": "application/json"
-      },
-      body: JSON.stringify({
-        model: MODEL,
-        messages,
-        temperature: 1,
-        top_p: 0.95,
-        max_tokens: 16384,
-        chat_template_kwargs: { enable_thinking: true },
-        stream: true
-      }),
-      signal: request.signal
-    });
-  } catch {
-    return json({ error: "Не удалось подключиться к NVIDIA. Проверьте настройки ключа." }, 502);
-  }
-  if (!upstream.ok) {
-    const status = upstream.status;
-    let detail = "";
-    try { detail = (await upstream.text()).slice(0, 500); } catch {}
-    console.error("NVIDIA API error", status, detail);
-    return json({ error: status === 401 ? "NVIDIA отклонила API-ключ." : "NVIDIA временно не смогла ответить. Попробуйте позже." }, status === 429 ? 429 : 502);
-  }
-  return new Response(streamNvidia(upstream), {
-    headers: {
-      "content-type": "text/event-stream; charset=utf-8",
-      "cache-control": "no-cache, no-transform",
-      "x-content-type-options": "nosniff"
+    async cancel() {
+      cancelled = true;
+      aborter.abort();
+      try { await upstreamReader?.cancel(); } catch {}
+      request.signal.removeEventListener("abort", abortFromRequest);
     }
   });
 }
+
+async function handleChat(request, env) {
+  const nvidiaApiKey = getNvidiaApiKey(env);
+  if (!nvidiaApiKey) return json({
+    type: "error", code: "not_configured",
+    error: "Cloudflare не передал секрет NVIDIA_API_KEY в текущий deployment. Проверьте, что Secret добавлен для Production, затем создайте новый deployment."
+  }, 503);
+
+  const firebaseProjectId = getFirebaseProjectId(env);
+  const bearer = request.headers.get("authorization") || "";
+  const token = bearer.match(/^Bearer\s+(.+)$/i)?.[1];
+  if (!token) return json({ type: "error", code: "unauthorized", error: "Войдите через Google, чтобы начать чат." }, 401);
+  let user;
+  try { user = await verifyFirebaseToken(token, firebaseProjectId); }
+  catch { return json({ type: "error", code: "unauthorized", error: "Не удалось проверить вход. Войдите в аккаунт ещё раз." }, 401); }
+
+  if (!rateAllowed(user.uid, env)) {
+    return json({
+      type: "error", code: "busy",
+      message: "Server is full right now. Please wait and try again in 2.5 minutes.",
+      retryAfterSec: 150
+    }, 429);
+  }
+
+  let body;
+  try {
+    const text = await request.text();
+    if (text.length > MAX_BODY) return json({ type: "error", code: "too_large", error: "Слишком большой запрос." }, 413);
+    body = JSON.parse(text);
+  } catch { return json({ type: "error", code: "bad_json", error: "Некорректный JSON." }, 400); }
+  const messages = validateMessages(body.messages);
+  if (!messages) return json({ type: "error", code: "invalid_messages", error: "Проверьте формат сообщения и попробуйте ещё раз." }, 400);
+
+  return new Response(streamNvidia(request, messages, nvidiaApiKey), {
+    headers: {
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-cache, no-transform",
+      "x-content-type-options": "nosniff",
+      "x-accel-buffering": "no"
+    }
+  });
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
