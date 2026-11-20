@@ -14,9 +14,10 @@ function getNvidiaApiKey(env) {
   return typeof value === "string" ? value.trim() : "";
 }
 function getSerperApiKey(env) {
-  // Accept common secret names so a misnamed Cloudflare binding still works.
+  // Accept common / typo secret names so Cloudflare binding still works.
   const value =
     env?.SERPER_API_KEY ??
+    env?.SERPER_AIP_KEY ??  // common typo: AIP instead of API
     env?.SERPER ??
     env?.SERPER_KEY ??
     env?.SERPERAPIKEY ??
