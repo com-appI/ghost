@@ -29,8 +29,24 @@
     authForm: $('authForm'), authName: $('authName'), authNameLabel: $('authNameLabel'),
     authEmail: $('authEmail'), authPassword: $('authPassword'), authSubmit: $('authSubmit'),
     authGoogle: $('authGoogle'), authForgot: $('authForgot'), authError: $('authError'),
-    authTitle: $('authTitle'), authSubtitle: $('authSubtitle'), loginTab: $('loginTab'), registerTab: $('registerTab')
+    authTitle: $('authTitle'), authSubtitle: $('authSubtitle'), loginTab: $('loginTab'), registerTab: $('registerTab'),
+    profileOverlay: $('profileOverlay'), profileClose: $('profileClose'), profileAvatar: $('profileAvatar'),
+    profileDisplayName: $('profileDisplayName'), profileEmailText: $('profileEmailText'), profileNameInput: $('profileNameInput'),
+    profileSaveBtn: $('profileSaveBtn'), profileSignoutBtn: $('profileSignoutBtn'), profileError: $('profileError'),
+    settingsOverlay: $('settingsOverlay'), settingsClose: $('settingsClose'), settingLightTheme: $('settingLightTheme'),
+    settingEnterSend: $('settingEnterSend'), settingAnimations: $('settingAnimations'),
+    searchOverlay: $('searchOverlay'), searchClose: $('searchClose'), searchCloseAction: $('searchCloseAction'),
+    searchBtn: $('searchBtn'), micBtn: $('micBtn'), sideProfileBtn: $('sideProfileBtn'), sideSettingsBtn: $('sideSettingsBtn'), accountRow: $('accountRow')
   };
+
+  const preferences = {
+    lightTheme: localStorage.getItem('ghost-light-theme') === 'true',
+    enterToSend: localStorage.getItem('ghost-enter-send') !== 'false',
+    animations: localStorage.getItem('ghost-animations') !== 'false'
+  };
+
+  let voiceRecognition = null;
+  let voiceListening = false;
 
   function toast(message) {
     els.toast.textContent = message;
@@ -69,6 +85,42 @@
     els.sidebarBackdrop.classList.remove('show');
   }
 
+  function closeOverlay(overlay) {
+    if (overlay) overlay.classList.add('hidden');
+  }
+
+  function applyPreferences() {
+    document.body.classList.toggle('light-theme', preferences.lightTheme);
+    document.body.classList.toggle('no-animations', !preferences.animations);
+    if (els.settingLightTheme) els.settingLightTheme.checked = preferences.lightTheme;
+    if (els.settingEnterSend) els.settingEnterSend.checked = preferences.enterToSend;
+    if (els.settingAnimations) els.settingAnimations.checked = preferences.animations;
+  }
+
+  function savePreferences() {
+    localStorage.setItem('ghost-light-theme', String(preferences.lightTheme));
+    localStorage.setItem('ghost-enter-send', String(preferences.enterToSend));
+    localStorage.setItem('ghost-animations', String(preferences.animations));
+    applyPreferences();
+  }
+
+  function openProfile() {
+    closeSidebar();
+    if (!state.user) { openAuth('login'); return; }
+    els.profileError.textContent = '';
+    els.profileNameInput.value = state.user.displayName || '';
+    els.profileOverlay.classList.remove('hidden');
+  }
+
+  function openSettings() {
+    closeSidebar();
+    els.settingsOverlay.classList.remove('hidden');
+  }
+
+  function openSearch() {
+    els.searchOverlay.classList.remove('hidden');
+  }
+
   function openSidebar() {
     els.sidebar.classList.add('open');
     els.sidebarBackdrop.classList.add('show');
@@ -98,6 +150,22 @@
       els.avatar.style.backgroundImage = '';
     }
     els.signinHint.textContent = signedIn ? 'Готово. Напишите сообщение ниже.' : 'Войдите или создайте аккаунт, чтобы начать.';
+    if (els.profileDisplayName) els.profileDisplayName.textContent = signedIn ? (user.displayName || 'Пользователь') : 'Гость';
+    if (els.profileEmailText) els.profileEmailText.textContent = signedIn ? (user.email || 'Аккаунт Google') : 'Нет активного аккаунта';
+    if (els.profileNameInput && signedIn) els.profileNameInput.value = user.displayName || '';
+    if (els.profileAvatar) {
+      els.profileAvatar.textContent = signedIn ? (user.displayName || user.email || 'G').slice(0, 1).toUpperCase() : 'G';
+      els.profileAvatar.style.backgroundImage = '';
+      if (signedIn && user.photoURL) {
+        try {
+          const profilePhoto = new URL(user.photoURL);
+          if (profilePhoto.protocol === 'https:') {
+            els.profileAvatar.style.backgroundImage = `url("${profilePhoto.href}")`;
+            els.profileAvatar.textContent = '';
+          }
+        } catch { /* Ignore an invalid profile image URL. */ }
+      }
+    }
   }
 
   function newChat() {
@@ -460,7 +528,11 @@
   els.authForm.addEventListener('submit', submitAuth);
   els.authGoogle.addEventListener('click', signInWithGoogle);
   els.authForgot.addEventListener('click', resetPassword);
-  document.addEventListener('keydown', (event) => { if (event.key === 'Escape') closeAuth(); });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      closeAuth(); closeOverlay(els.profileOverlay); closeOverlay(els.settingsOverlay); closeOverlay(els.searchOverlay); closeSidebar();
+    }
+  });
   els.signOutBtn.addEventListener('click', async () => {
     try { await state.auth.signOut(); newChat(); toast('Вы вышли из аккаунта.'); }
     catch { toast('Не удалось выйти из аккаунта.'); }
@@ -488,17 +560,78 @@
   });
   els.messageInput.addEventListener('input', resizeInput);
   els.messageInput.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter' && !event.shiftKey) {
+    const shouldSend = event.key === 'Enter' && (preferences.enterToSend ? !event.shiftKey : event.ctrlKey);
+    if (shouldSend) {
       event.preventDefault();
       els.composerForm.requestSubmit();
     }
   });
   els.stopBtn.addEventListener('click', stopGeneration);
+
+  // Profile, settings and planned web-search screen.
+  els.sideProfileBtn.addEventListener('click', openProfile);
+  els.sideSettingsBtn.addEventListener('click', openSettings);
+  els.accountRow.addEventListener('click', (event) => { if (!event.target.closest('#signOutBtn')) openProfile(); });
+  els.profileClose.addEventListener('click', () => closeOverlay(els.profileOverlay));
+  els.settingsClose.addEventListener('click', () => closeOverlay(els.settingsOverlay));
+  els.searchClose.addEventListener('click', () => closeOverlay(els.searchOverlay));
+  els.searchCloseAction.addEventListener('click', () => closeOverlay(els.searchOverlay));
+  [els.profileOverlay, els.settingsOverlay, els.searchOverlay].forEach((overlay) => {
+    overlay.addEventListener('click', (event) => { if (event.target === overlay) closeOverlay(overlay); });
+  });
+  els.profileSaveBtn.addEventListener('click', async () => {
+    if (!state.user) return openAuth('login');
+    const displayName = els.profileNameInput.value.trim();
+    if (!displayName) { els.profileError.textContent = 'Введите имя профиля.'; return; }
+    els.profileSaveBtn.disabled = true;
+    els.profileError.textContent = '';
+    try {
+      await state.user.updateProfile({ displayName });
+      updateAuthUI(state.auth.currentUser || state.user);
+      toast('Профиль обновлён.');
+      closeOverlay(els.profileOverlay);
+    } catch (error) {
+      console.warn('Profile update:', error.code || error.message);
+      els.profileError.textContent = 'Не удалось сохранить имя. Попробуйте ещё раз.';
+    } finally { els.profileSaveBtn.disabled = false; }
+  });
+  els.profileSignoutBtn.addEventListener('click', async () => {
+    if (!state.auth) return;
+    try { await state.auth.signOut(); newChat(); closeOverlay(els.profileOverlay); toast('Вы вышли из аккаунта.'); }
+    catch { els.profileError.textContent = 'Не удалось выйти из аккаунта.'; }
+  });
+  els.settingLightTheme.addEventListener('change', () => { preferences.lightTheme = els.settingLightTheme.checked; savePreferences(); });
+  els.settingEnterSend.addEventListener('change', () => { preferences.enterToSend = els.settingEnterSend.checked; savePreferences(); toast(preferences.enterToSend ? 'Enter отправляет сообщение.' : 'Для отправки используйте Ctrl + Enter.'); });
+  els.settingAnimations.addEventListener('change', () => { preferences.animations = els.settingAnimations.checked; savePreferences(); });
+  els.searchBtn.addEventListener('click', openSearch);
+
+  // Speech-to-text is browser-dependent; gracefully explain when unavailable.
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (SpeechRecognition) {
+    voiceRecognition = new SpeechRecognition();
+    voiceRecognition.continuous = false;
+    voiceRecognition.interimResults = true;
+    voiceRecognition.lang = /ru/i.test(navigator.language || '') ? 'ru-RU' : (navigator.language || 'en-US');
+    voiceRecognition.onstart = () => { voiceListening = true; els.micBtn.classList.add('listening'); };
+    voiceRecognition.onend = () => { voiceListening = false; els.micBtn.classList.remove('listening'); };
+    voiceRecognition.onerror = (event) => { voiceListening = false; els.micBtn.classList.remove('listening'); toast(event.error === 'not-allowed' ? 'Разрешите доступ к микрофону.' : 'Голосовой ввод не сработал.'); };
+    voiceRecognition.onresult = (event) => {
+      let transcript = '';
+      for (let index = event.resultIndex; index < event.results.length; index++) transcript += event.results[index][0].transcript;
+      if (transcript) { els.messageInput.value = `${els.messageInput.value}${els.messageInput.value ? ' ' : ''}${transcript.trim()}`; resizeInput(); }
+    };
+  }
+  els.micBtn.addEventListener('click', () => {
+    if (!voiceRecognition) { toast('Голосовой ввод не поддерживается этим браузером.'); return; }
+    if (voiceListening) { try { voiceRecognition.stop(); } catch {} return; }
+    try { voiceRecognition.start(); } catch { toast('Не удалось запустить микрофон.'); }
+  });
+
   document.querySelectorAll('[data-prompt]').forEach((button) => {
     button.addEventListener('click', () => {
       els.messageInput.value = button.dataset.prompt || '';
       resizeInput();
-      if (state.user) els.composerForm.requestSubmit(); else signIn();
+      if (state.user) els.composerForm.requestSubmit(); else openAuth('login');
     });
   });
 
@@ -509,6 +642,7 @@
     console.info('Ghost AI API health check unavailable.');
   });
 
+  applyPreferences();
   renderChatList();
   initializeFirebase();
 })();

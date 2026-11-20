@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#101113">
-  <meta name="description" content="Ghost AI — твой ИИ-помощник на базе NVIDIA Nemotron.">
+  <meta name="theme-color" content="#08090a">
+  <meta name="description" content="Ghost AI — умный чат на базе NVIDIA Nemotron.">
   <title>Ghost AI</title>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/styles.css">
@@ -15,101 +15,152 @@
   <script defer src="/app.js"></script>
 </head>
 <body>
-  <div class="app-shell">
-    <aside class="sidebar" id="sidebar">
-      <div class="brand-row">
-        <a class="brand" href="/" aria-label="Ghost AI home">
-          <span class="brand-mark"><svg viewBox="0 0 40 40" aria-hidden="true"><path d="M20 4.5c-8.1 0-14 5.9-14 14v14.1c0 2.5 2.9 3.8 4.8 2.1l3.1-2.8 3.1 2.8a4.4 4.4 0 0 0 6 0l3.1-2.8 3.1 2.8c1.9 1.7 4.8.4 4.8-2.1V18.5c0-8.1-5.9-14-14-14Z" fill="currentColor"/><circle cx="15" cy="18" r="1.7" fill="#111214"/><circle cx="25" cy="18" r="1.7" fill="#111214"/><path d="M16 24c2.2 1.8 5.8 1.8 8 0" fill="none" stroke="#111214" stroke-width="1.8" stroke-linecap="round"/></svg></span>
-          <span>ghost<span class="brand-muted">ai</span></span>
-        </a>
-        <button class="icon-button mobile-only" id="closeSidebar" aria-label="Закрыть меню">×</button>
-      </div>
-      <button class="new-chat-button" id="newChatBtn"><span class="plus">＋</span> Новый чат</button>
-      <div class="sidebar-label">История</div>
-      <div class="chat-list" id="chatList"><div class="empty-history">Здесь появятся ваши чаты</div></div>
-      <div class="sidebar-bottom">
-        <div class="model-card"><span class="status-dot"></span><span><b>Nemotron 3 Ultra</b><small>Модель активна</small></span></div>
-        <div class="account-row" id="accountRow">
-          <div class="avatar" id="avatar">G</div>
-          <div class="account-info"><b id="userName">Гость</b><small id="userEmail">Войдите, чтобы начать</small></div>
-          <button class="icon-button signout-button hidden" id="signOutBtn" title="Выйти">↗</button>
-        </div>
-      </div>
-    </aside>
-    <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
-
-    <main class="main-panel">
-      <header class="topbar">
-        <div class="topbar-left">
-          <button class="icon-button menu-button" id="menuBtn" aria-label="Открыть меню">☰</button>
-          <div class="mobile-brand"><span class="mini-mark">◈</span> ghost<span>ai</span></div>
-        </div>
-        <div class="topbar-center"><span class="topbar-model-dot"></span> Ghost AI <span class="topbar-divider">·</span> Nemotron 3 Ultra <span class="chevron">⌄</span></div>
-        <div class="topbar-right">
-          <button class="signin-button" id="signInBtn"><span class="google-g">G</span> Войти через Google</button>
-          <button class="icon-button mobile-new-chat" id="mobileNewChat" aria-label="Новый чат">＋</button>
-        </div>
-      </header>
-
-      <section class="conversation" id="conversation">
-        <div class="welcome" id="welcome">
-          <div class="welcome-orb"><svg viewBox="0 0 60 60" aria-hidden="true"><path d="M30 7c-12.1 0-21 8.8-21 21v19.1c0 3.8 4.4 5.7 7.2 3.1l4.6-4.2 4.6 4.2a6.6 6.6 0 0 0 9 0l4.6-4.2 4.6 4.2c2.8 2.6 7.2.7 7.2-3.1V28C51 15.8 42.1 7 30 7Z" fill="currentColor"/><circle cx="22.5" cy="27" r="2.4" fill="#151619"/><circle cx="37.5" cy="27" r="2.4" fill="#151619"/><path d="M24 36c3.6 2.9 8.4 2.9 12 0" fill="none" stroke="#151619" stroke-width="2.4" stroke-linecap="round"/></svg></div>
-          <p class="eyebrow">ТВОЙ ИИ-ПОМОЩНИК</p>
-          <h1>Привет. Я <span>Ghost AI.</span></h1>
-          <p class="welcome-copy">О чём поговорим сегодня?</p>
-          <div class="suggestions">
-            <button class="suggestion" data-prompt="Объясни сложную тему простыми словами"><span>✦</span><b>Объяснить тему</b><small>Просто и понятно</small></button>
-            <button class="suggestion" data-prompt="Помоги придумать интересную идею для проекта"><span>⌘</span><b>Придумать идею</b><small>Найти вдохновение</small></button>
-            <button class="suggestion" data-prompt="Помоги написать красивый и понятный текст"><span>✎</span><b>Написать текст</b><small>С нуля или улучшить</small></button>
-            <button class="suggestion" data-prompt="Расскажи что-нибудь удивительное и интересное"><span>◌</span><b>Узнать новое</b><small>Открыть что-то интересное</small></button>
-          </div>
-          <div class="signin-hint" id="signinHint">Чтобы начать, войдите через Google.</div>
-        </div>
-        <div class="messages hidden" id="messages" aria-live="polite"></div>
-      </section>
-
-      <footer class="composer-area">
-        <form class="composer" id="composerForm">
-          <textarea id="messageInput" rows="1" maxlength="12000" placeholder="Напишите сообщение Ghost AI..." aria-label="Ваше сообщение"></textarea>
-          <div class="composer-bottom">
-            <div class="composer-meta"><span class="secure-icon">✧</span><span>Ghost AI может ошибаться. Проверяйте важную информацию.</span></div>
-            <div class="composer-actions">
-              <span class="model-caption">Nemotron 3 Ultra</span>
-              <button type="button" class="stop-button hidden" id="stopBtn">Остановить</button>
-              <button type="submit" class="send-button" id="sendBtn" aria-label="Отправить сообщение"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
-            </div>
-          </div>
-        </form>
-        <div class="footer-note">Минималистичный интерфейс. Большие идеи.</div>
-      </footer>
-    </main>
-  </div>
-  <section class="auth-overlay hidden" id="authOverlay" aria-modal="true" role="dialog" aria-labelledby="authTitle">
-    <div class="auth-card">
-      <button class="auth-close" id="authClose" type="button" aria-label="Закрыть">×</button>
-      <div class="auth-mark">✧</div>
-      <p class="auth-eyebrow">GHOST AI ACCOUNT</p>
-      <h2 id="authTitle">С возвращением</h2>
-      <p class="auth-subtitle" id="authSubtitle">Войдите, чтобы продолжить общение с Ghost AI.</p>
-      <div class="auth-tabs" role="tablist" aria-label="Тип аккаунта">
-        <button class="auth-tab active" id="loginTab" type="button" role="tab" aria-selected="true">Вход</button>
-        <button class="auth-tab" id="registerTab" type="button" role="tab" aria-selected="false">Регистрация</button>
-      </div>
-      <form id="authForm" class="auth-form">
-        <label for="authName" id="authNameLabel" class="hidden">Имя</label>
-        <input id="authName" class="auth-input hidden" type="text" autocomplete="name" placeholder="Как вас зовут" maxlength="60">
-        <label for="authEmail">Электронная почта</label>
-        <input id="authEmail" class="auth-input" type="email" autocomplete="email" placeholder="name@example.com" required>
-        <label for="authPassword">Пароль</label>
-        <input id="authPassword" class="auth-input" type="password" autocomplete="current-password" placeholder="Не менее 6 символов" minlength="6" required>
-        <button class="auth-submit" id="authSubmit" type="submit">Войти</button>
-      </form>
-      <button class="auth-google" id="authGoogle" type="button"><span class="google-g">G</span> Продолжить с Google</button>
-      <button class="auth-forgot" id="authForgot" type="button">Забыли пароль?</button>
-      <p class="auth-error" id="authError" role="alert" aria-live="polite"></p>
-      <p class="auth-legal">Продолжая, вы соглашаетесь использовать Ghost AI в соответствии с правилами сервиса.</p>
+<div id="app" class="app-shell">
+  <header class="topbar">
+    <div class="topbar-left">
+      <button class="icon-button" id="menuBtn" aria-label="Открыть меню" type="button">
+        <svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+      </button>
+      <a class="brand" href="/" aria-label="Ghost AI">
+        <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 40 40"><path d="M20 4.5c-8.1 0-14 5.9-14 14v14.1c0 2.5 2.9 3.8 4.8 2.1l3.1-2.8 3.1 2.8a4.4 4.4 0 0 0 6 0l3.1-2.8 3.1 2.8c1.9 1.7 4.8.4 4.8-2.1V18.5c0-8.1-5.9-14-14-14Z"/><circle cx="15" cy="18" r="1.7"/><circle cx="25" cy="18" r="1.7"/></svg></span>
+        <span>ghost<span class="brand-muted">ai</span></span>
+      </a>
     </div>
-  </section>
-  <div class="toast" id="toast" role="status"></div>
+    <div class="topbar-center"><span class="live-dot"></span><span>Nemotron 3 Ultra</span><span class="topbar-divider">·</span><span class="model-status">Онлайн</span></div>
+    <div class="topbar-right">
+      <button class="signin-button" id="signInBtn" type="button"><span class="google-g">G</span><span>Войти</span></button>
+      <button class="icon-button new-chat-top" id="mobileNewChat" aria-label="Новый чат" type="button"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
+    </div>
+  </header>
+
+  <div class="workspace">
+    <main class="conversation" id="conversation">
+      <section class="welcome" id="welcome">
+        <div class="welcome-orb" aria-hidden="true"><svg viewBox="0 0 64 64"><path d="M32 6c-11 0-20 9.2-20 22.2V46c0 1.4 1.5 2.3 2.7 1.6L20 44.2l5.2 5.4c.8.8 2 .8 2.8 0L32 45.6l4-4 4 4c.8.8 2 .8 2.8 0l5.2-5.4 5.3 3.4c1.2.7 2.7-.2 2.7-1.6V28.2C56 15.2 47 6 32 6Z"/><circle cx="24.5" cy="28" r="3.2"/><circle cx="39.5" cy="28" r="3.2"/></svg></div>
+        <p class="eyebrow">ТВОЙ ИИ-ПОМОЩНИК</p>
+        <h1>Привет. Я <span>Ghost AI.</span></h1>
+        <p class="welcome-copy">О чём поговорим сегодня?</p>
+        <div class="suggestions">
+          <button class="suggestion" data-prompt="Объясни сложную тему простыми словами" type="button"><span class="suggestion-icon">✦</span><b>Объяснить тему</b><small>Просто и понятно</small></button>
+          <button class="suggestion" data-prompt="Помоги придумать интересную идею для проекта" type="button"><span class="suggestion-icon">⌘</span><b>Придумать идею</b><small>Найти вдохновение</small></button>
+          <button class="suggestion" data-prompt="Помоги написать красивый и понятный текст" type="button"><span class="suggestion-icon">✎</span><b>Написать текст</b><small>С нуля или улучшить</small></button>
+          <button class="suggestion" data-prompt="Расскажи что-нибудь удивительное и интересное" type="button"><span class="suggestion-icon">◌</span><b>Узнать новое</b><small>Открыть что-то интересное</small></button>
+        </div>
+        <div class="signin-hint" id="signinHint">Войдите или создайте аккаунт, чтобы начать.</div>
+      </section>
+      <div class="messages hidden" id="messages" aria-live="polite"></div>
+    </main>
+
+    <footer class="composer-area">
+      <form class="composer" id="composerForm">
+        <textarea id="messageInput" rows="1" maxlength="12000" placeholder="Напишите сообщение Ghost AI…" aria-label="Ваше сообщение"></textarea>
+        <div class="composer-bottom">
+          <div class="composer-tools">
+            <button class="tool-button" id="searchBtn" type="button" aria-label="Поиск"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="m16 16 4 4"/></svg><span>Поиск</span></button>
+            <button class="tool-button icon-only" id="micBtn" type="button" aria-label="Голосовой ввод"><svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3m-4 0h8"/></svg></button>
+          </div>
+          <div class="composer-actions">
+            <span class="model-caption">Nemotron 3 Ultra</span>
+            <button type="button" class="stop-button hidden" id="stopBtn">Остановить</button>
+            <button type="submit" class="send-button" id="sendBtn" aria-label="Отправить сообщение"><svg viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button>
+          </div>
+        </div>
+      </form>
+      <div class="footer-note"><span>✧</span> Ghost AI может ошибаться. Проверяйте важную информацию.</div>
+    </footer>
+  </div>
+
+  <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+  <aside class="sidebar" id="sidebar" aria-label="Боковое меню">
+    <div class="sidebar-head"><span>ТВОЁ ПРОСТРАНСТВО</span><button class="icon-button" id="closeSidebar" type="button" aria-label="Закрыть меню">×</button></div>
+    <button class="new-chat-button" id="newChatBtn" type="button"><span>＋</span> Новый чат</button>
+    <div class="sidebar-section-label">ИСТОРИЯ ЧАТОВ</div>
+    <div class="chat-list" id="chatList"><div class="empty-history">Здесь появятся ваши чаты</div></div>
+    <div class="sidebar-bottom">
+      <div class="model-card"><span class="status-dot"></span><span><b>Nemotron 3 Ultra</b><small>Модель активна</small></span></div>
+      <button class="sidebar-action" id="sideProfileBtn" type="button"><span class="action-icon">◉</span><span>Профиль</span></button>
+      <button class="sidebar-action" id="sideSettingsBtn" type="button"><span class="action-icon">⚙</span><span>Настройки</span></button>
+      <div class="account-row" id="accountRow">
+        <div class="avatar" id="avatar">G</div>
+        <div class="account-info"><b id="userName">Гость</b><small id="userEmail">Войдите, чтобы начать</small></div>
+        <button class="icon-button signout-button hidden" id="signOutBtn" title="Выйти" type="button" aria-label="Выйти">↗</button>
+      </div>
+    </div>
+  </aside>
+  <button class="sidebar-backdrop-hit hidden" type="button" aria-label="Закрыть меню"></button>
+</div>
+
+<!-- Authentication -->
+<section class="modal-overlay hidden" id="authOverlay" aria-modal="true" role="dialog" aria-labelledby="authTitle">
+  <div class="modal-card auth-card">
+    <button class="modal-close" id="authClose" type="button" aria-label="Закрыть">×</button>
+    <div class="modal-brand-mark">✧</div>
+    <p class="modal-eyebrow">GHOST AI ACCOUNT</p>
+    <h2 id="authTitle">С возвращением</h2>
+    <p class="modal-subtitle" id="authSubtitle">Войдите, чтобы продолжить общение с Ghost AI.</p>
+    <div class="auth-tabs" role="tablist" aria-label="Тип аккаунта">
+      <button class="auth-tab active" id="loginTab" type="button" role="tab" aria-selected="true">Вход</button>
+      <button class="auth-tab" id="registerTab" type="button" role="tab" aria-selected="false">Регистрация</button>
+    </div>
+    <form id="authForm" class="auth-form">
+      <label for="authName" id="authNameLabel" class="hidden">Ваше имя</label>
+      <input id="authName" class="auth-input hidden" type="text" autocomplete="name" placeholder="Как вас зовут" maxlength="60">
+      <label for="authEmail">Электронная почта</label>
+      <input id="authEmail" class="auth-input" type="email" autocomplete="email" placeholder="name@example.com" required>
+      <label for="authPassword">Пароль</label>
+      <input id="authPassword" class="auth-input" type="password" autocomplete="current-password" placeholder="Не менее 6 символов" minlength="6" required>
+      <button class="auth-submit" id="authSubmit" type="submit">Войти</button>
+    </form>
+    <div class="auth-separator"><span>или</span></div>
+    <button class="auth-google" id="authGoogle" type="button"><span class="google-g">G</span> Продолжить с Google</button>
+    <button class="auth-forgot" id="authForgot" type="button">Забыли пароль?</button>
+    <p class="auth-error" id="authError" role="alert" aria-live="polite"></p>
+    <p class="auth-legal">Ваши чаты сохраняются в вашем аккаунте. Никому не передавайте пароль.</p>
+  </div>
+</section>
+
+<!-- Profile -->
+<section class="modal-overlay hidden" id="profileOverlay" aria-modal="true" role="dialog" aria-labelledby="profileTitle">
+  <div class="modal-card">
+    <button class="modal-close" id="profileClose" type="button" aria-label="Закрыть">×</button>
+    <p class="modal-eyebrow">ACCOUNT</p>
+    <h2 id="profileTitle">Твой профиль</h2>
+    <p class="modal-subtitle">Управляй данными своего аккаунта Ghost AI.</p>
+    <div class="profile-summary"><div class="profile-avatar" id="profileAvatar">G</div><div><b id="profileDisplayName">Гость</b><small id="profileEmailText">Нет активного аккаунта</small></div></div>
+    <label class="field-label" for="profileNameInput">Имя профиля</label>
+    <input class="auth-input" id="profileNameInput" type="text" maxlength="60" placeholder="Твоё имя">
+    <button class="auth-submit modal-main-action" id="profileSaveBtn" type="button">Сохранить изменения</button>
+    <button class="danger-action" id="profileSignoutBtn" type="button">Выйти из аккаунта</button>
+    <p class="auth-error" id="profileError" role="alert"></p>
+  </div>
+</section>
+
+<!-- Settings -->
+<section class="modal-overlay hidden" id="settingsOverlay" aria-modal="true" role="dialog" aria-labelledby="settingsTitle">
+  <div class="modal-card">
+    <button class="modal-close" id="settingsClose" type="button" aria-label="Закрыть">×</button>
+    <p class="modal-eyebrow">PREFERENCES</p>
+    <h2 id="settingsTitle">Настройки</h2>
+    <p class="modal-subtitle">Настрой Ghost AI под себя.</p>
+    <div class="setting-row"><div><b>Светлая тема</b><small>Переключить оформление приложения</small></div><label class="switch"><input id="settingLightTheme" type="checkbox"><span></span></label></div>
+    <div class="setting-row"><div><b>Enter для отправки</b><small>Shift + Enter — новая строка</small></div><label class="switch"><input id="settingEnterSend" type="checkbox" checked><span></span></label></div>
+    <div class="setting-row"><div><b>Анимации</b><small>Плавное появление сообщений</small></div><label class="switch"><input id="settingAnimations" type="checkbox" checked><span></span></label></div>
+    <div class="settings-footnote">Настройки сохраняются на этом устройстве.</div>
+  </div>
+</section>
+
+<!-- Search placeholder: backend will be connected later -->
+<section class="modal-overlay hidden" id="searchOverlay" aria-modal="true" role="dialog" aria-labelledby="searchTitle">
+  <div class="modal-card">
+    <button class="modal-close" id="searchClose" type="button" aria-label="Закрыть">×</button>
+    <p class="modal-eyebrow">GHOST SEARCH</p>
+    <h2 id="searchTitle">Поиск в интернете</h2>
+    <p class="modal-subtitle">Отдельный поиск подключим следующим обновлением.</p>
+    <div class="search-preview"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="m16 16 4 4"/></svg><span>Здесь появятся результаты поиска</span></div>
+    <button class="auth-submit modal-main-action" id="searchCloseAction" type="button">Понятно</button>
+  </div>
+</section>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
 </body>
 </html>
