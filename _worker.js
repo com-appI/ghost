@@ -1,25 +1,24 @@
 const MODEL = "nvidia/nemotron-3-ultra-550b-a55b";
 const NVIDIA_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
+const SERPER_URL = "https://google.serper.dev/search";
 const FIREBASE_JWKS_URL = "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com";
 const MAX_BODY = 128 * 1024;
 const MAX_MESSAGES = 24;
 const MAX_CHARS = 12000;
-// Firebase project ID is public configuration; keep a fallback so Pages does not
-// require a second runtime variable just to validate Firebase ID tokens.
 const DEFAULT_FIREBASE_PROJECT_ID = "toypsig-2953f";
 let jwksCache = { keys: null, expires: 0 };
 const rateBuckets = new Map();
 
 function getNvidiaApiKey(env) {
-  // NVIDIA_API_KEY is the documented binding name. NVIDIA is retained as a
-  // compatibility alias for deployments where the secret was named NVIDIA.
   const value = env?.NVIDIA_API_KEY ?? env?.NVIDIA ?? "";
   return typeof value === "string" ? value.trim() : "";
 }
+function getSerperApiKey(env) {
+  const value = env?.SERPER_API_KEY ?? "";
+  return typeof value === "string" ? value.trim() : "";
+}
 function getFirebaseProjectId(env) {
-  const configured = typeof env?.FIREBASE_PROJECT_ID === "string"
-    ? env.FIREBASE_PROJECT_ID.trim()
-    : "";
+  const configured = typeof env?.FIREBASE_PROJECT_ID === "string" ? env.FIREBASE_PROJECT_ID.trim() : "";
   return configured || DEFAULT_FIREBASE_PROJECT_ID;
 }
 function json(data, status = 200) {
@@ -54,51 +53,156 @@ async function verifyFirebaseToken(token, projectId) {
   const parts = String(token || "").split(".");
   if (parts.length !== 3 || !projectId) throw new Error("Invalid token");
   const header = decodePart(parts[0]);
-  const claims = decodePart(parts[1]);
-  if (header.alg !== "RS256" || !header.kid) throw new Error("Invalid token");
-  let jwk = (await getJwks()).find(k => k.kid === header.kid && k.kty === "RSA");
-  if (!jwk) {
-    jwksCache.expires = 0;
-    jwk = (await getJwks()).find(k => k.kid === header.kid && k.kty === "RSA");
-  }
-  if (!jwk) throw new Error("Unknown signing key");
-  const key = await crypto.subtle.importKey("jwk", jwk, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["verify"]);
-  const signed = new TextEncoder().encode(parts[0] + "." + parts[1]);
+  const payload = decodePart(parts[1]);
+  if (header.alg !== "RS256") throw new Error("Unsupported token algorithm");
+  if (payload.iss !== `https://securetoken.google.com/${projectId}`) throw new Error("Invalid issuer");
+  if (payload.aud !== projectId) throw new Error("Invalid audience");
+  if (!payload.sub || typeof payload.sub !== "string") throw new Error("Invalid subject");
+  if (typeof payload.exp !== "number" || payload.exp * 1000 < Date.now() - 30000) throw new Error("Token expired");
+  const keys = await getJwks();
+  const jwk = keys.find((key) => key.kid === header.kid);
+  if (!jwk) throw new Error("Signing key not found");
+  const key = await crypto.subtle.importKey(
+    "jwk",
+    jwk,
+    { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+    false,
+    ["verify"]
+  );
+  const data = new TextEncoder().encode(`${parts[0]}.${parts[1]}`);
   const signature = decodeB64url(parts[2]);
-  const valid = await crypto.subtle.verify({ name: "RSASSA-PKCS1-v1_5" }, key, signature, signed);
-  const now = Math.floor(Date.now() / 1000);
-  if (!valid || claims.aud !== projectId || claims.iss !== `https://securetoken.google.com/${projectId}` ||
-      typeof claims.sub !== "string" || !claims.sub || claims.sub.length > 128 ||
-      typeof claims.exp !== "number" || claims.exp <= now ||
-      typeof claims.iat !== "number" || claims.iat > now + 60) throw new Error("Invalid Firebase token");
-  return { uid: claims.sub };
-}
-function validateMessages(value) {
-  if (!Array.isArray(value) || value.length < 1 || value.length > MAX_MESSAGES) return null;
-  const out = [];
-  for (const item of value) {
-    if (!item || !["user", "assistant"].includes(item.role) || typeof item.content !== "string") return null;
-    const content = item.content.trim();
-    if (!content || content.length > MAX_CHARS || (out.length && out[out.length - 1].role === item.role)) return null;
-    out.push({ role: item.role, content });
-  }
-  if (out[0].role !== "user" || out[out.length - 1].role !== "user") return null;
-  return out;
+  const valid = await crypto.subtle.verify("RSASSA-PKCS1-v1_5", key, signature, data);
+  if (!valid) throw new Error("Invalid signature");
+  return { uid: payload.sub, email: payload.email || null };
 }
 function rateAllowed(uid, env) {
+  const limit = Number(env?.RATE_LIMIT_PER_MIN || 20);
   const now = Date.now();
-  const limit = Math.max(1, Number(env.RATE_LIMIT_REQUESTS) || 20);
-  const windowMs = Math.max(60000, Number(env.RATE_LIMIT_WINDOW_MS) || 600000);
-  const current = rateBuckets.get(uid);
-  if (!current || current.reset <= now) {
-    rateBuckets.set(uid, { count: 1, reset: now + windowMs });
-    return true;
+  const bucket = rateBuckets.get(uid) || { count: 0, reset: now + 60000 };
+  if (now > bucket.reset) {
+    bucket.count = 0;
+    bucket.reset = now + 60000;
   }
-  if (current.count >= limit) return false;
-  current.count += 1;
-  return true;
+  bucket.count += 1;
+  rateBuckets.set(uid, bucket);
+  return bucket.count <= limit;
 }
-function streamNvidia(request, messages, nvidiaApiKey) {
+function validateMessages(messages) {
+  if (!Array.isArray(messages) || !messages.length || messages.length > MAX_MESSAGES) return null;
+  let total = 0;
+  const clean = [];
+  for (const message of messages) {
+    if (!message || (message.role !== "user" && message.role !== "assistant" && message.role !== "system")) return null;
+    const content = String(message.content || "").trim();
+    if (!content) continue;
+    total += content.length;
+    if (total > MAX_CHARS) return null;
+    clean.push({ role: message.role, content: content.slice(0, 8000) });
+  }
+  return clean.length ? clean : null;
+}
+
+function lastUserText(messages) {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === "user") return messages[i].content;
+  }
+  return "";
+}
+
+/** Heuristic: only search when the question needs live/public web info. */
+function shouldSearch(text, forceSearch) {
+  if (forceSearch) return true;
+  const q = String(text || "").toLowerCase();
+  if (!q || q.length < 4) return false;
+  // Skip pure greetings / simple chat
+  if (/^(hi|hello|hey|привет|здравствуй|как дела|who are you|что ты|ты кто)\b/.test(q) && q.length < 40) return false;
+  const hints = [
+    "найди", "поищи", "загугли", "search", "google", "look up", "find me",
+    "новости", "news", "latest", "актуальн", "сейчас", "сегодня", "today", "this week",
+    "цена", "price", "курс", "version", "релиз", "release", "update",
+    "источник", "sources", "сайт", "website", "url", "http",
+    "who won", "когда вышел", "что нового", "current"
+  ];
+  if (hints.some((h) => q.includes(h))) return true;
+  if (/\b(20(2[4-9]|3[0-9]))\b/.test(q) && /(version|release|news|цена|price|курс)/.test(q)) return true;
+  return false;
+}
+
+function buildSearchQueries(text) {
+  const q = String(text || "").trim().slice(0, 200);
+  const queries = [q];
+  // Light second query for refinement on long questions
+  if (q.length > 80) {
+    const short = q.replace(/[?!.]+/g, " ").split(/\s+/).slice(0, 12).join(" ");
+    if (short && short !== q) queries.push(short);
+  }
+  return queries.slice(0, 2);
+}
+
+async function serperSearch(query, apiKey, signal) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 12000);
+  const onAbort = () => controller.abort();
+  if (signal) signal.addEventListener("abort", onAbort, { once: true });
+  try {
+    const response = await fetch(SERPER_URL, {
+      method: "POST",
+      headers: {
+        "X-API-KEY": apiKey,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({ q: query, num: 6 }),
+      signal: controller.signal
+    });
+    if (response.status === 401 || response.status === 403) {
+      const err = new Error("Serper authentication failed");
+      err.code = "serper_auth";
+      throw err;
+    }
+    if (response.status === 429) {
+      const err = new Error("Serper rate limited");
+      err.code = "serper_busy";
+      throw err;
+    }
+    if (!response.ok) {
+      const err = new Error(`Serper HTTP ${response.status}`);
+      err.code = "serper_error";
+      throw err;
+    }
+    const data = await response.json();
+    const organic = Array.isArray(data.organic) ? data.organic : [];
+    return organic.map((item) => ({
+      title: String(item.title || "").slice(0, 160),
+      url: String(item.link || item.url || "").slice(0, 500),
+      snippet: String(item.snippet || item.description || "").slice(0, 320),
+      domain: (() => {
+        try { return new URL(item.link || item.url || "").hostname.replace(/^www\./, ""); }
+        catch { return ""; }
+      })()
+    })).filter((s) => s.url.startsWith("http"));
+  } finally {
+    clearTimeout(timer);
+    if (signal) signal.removeEventListener("abort", onAbort);
+  }
+}
+
+function formatSearchContext(sources) {
+  if (!sources.length) {
+    return "Web search returned no results. Answer from general knowledge and say that live sources were not found.";
+  }
+  const lines = sources.map((s, i) =>
+    `[${i + 1}] ${s.title}\nURL: ${s.url}\nSnippet: ${s.snippet}`
+  );
+  return [
+    "Web search evidence from Google via Serper (snippets only — not full page text).",
+    "Use only these URLs when citing sources. Do not invent links.",
+    "If the snippets are incomplete, say the answer is based on search snippets.",
+    "",
+    lines.join("\n\n")
+  ].join("\n");
+}
+
+function streamChat(request, messages, env, options = {}) {
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
   const aborter = new AbortController();
@@ -106,6 +210,10 @@ function streamNvidia(request, messages, nvidiaApiKey) {
   let upstreamReader = null;
   const abortFromRequest = () => aborter.abort();
   request.signal.addEventListener("abort", abortFromRequest, { once: true });
+
+  const nvidiaApiKey = getNvidiaApiKey(env);
+  const serperApiKey = getSerperApiKey(env);
+  const forceSearch = !!options.forceSearch;
 
   return new ReadableStream({
     async start(controller) {
@@ -117,9 +225,66 @@ function streamNvidia(request, messages, nvidiaApiKey) {
         if (retryAfterSec) packet.retryAfterSec = retryAfterSec;
         send(packet);
       };
+
       try {
-        // This is a real server-side event: the request is now being sent to NVIDIA.
         send({ type: "status", stage: "thinking", label: "Thinking…" });
+
+        const userText = lastUserText(messages);
+        const wantSearch = shouldSearch(userText, forceSearch);
+        let sources = [];
+        let modelMessages = messages.slice();
+
+        if (wantSearch) {
+          if (!serperApiKey) {
+            sendError("config", "Search is not configured. Set SERPER_API_KEY in Cloudflare secrets.");
+            return;
+          }
+          send({ type: "status", stage: "search", label: "Checking the site…" });
+          const queries = buildSearchQueries(userText);
+          try {
+            for (const query of queries) {
+              if (aborter.signal.aborted) break;
+              const batch = await serperSearch(query, serperApiKey, aborter.signal);
+              for (const item of batch) {
+                if (!sources.some((s) => s.url === item.url)) sources.push(item);
+              }
+              if (sources.length >= 6) break;
+            }
+          } catch (error) {
+            if (aborter.signal.aborted) return;
+            if (error?.code === "serper_auth") {
+              sendError("serper_auth", "Search API key was rejected. Check SERPER_API_KEY.");
+              return;
+            }
+            if (error?.code === "serper_busy") {
+              sendError("busy", "Search is busy right now. Please wait and try again in 2.5 minutes.", 150);
+              return;
+            }
+            sendError("serper_error", "Search failed. Please try again.");
+            return;
+          }
+
+          send({ type: "status", stage: "resources", label: "Checking resources…" });
+          if (sources.length) {
+            send({
+              type: "sources",
+              items: sources.slice(0, 8).map((s) => ({
+                title: s.title,
+                url: s.url,
+                snippet: s.snippet,
+                domain: s.domain
+              }))
+            });
+          }
+
+          modelMessages = messages.concat({
+            role: "system",
+            content: formatSearchContext(sources.slice(0, 8))
+          });
+        }
+
+        send({ type: "status", stage: "answer", label: "Formulating the answer…" });
+
         const upstream = await fetch(NVIDIA_URL, {
           method: "POST",
           headers: {
@@ -129,7 +294,7 @@ function streamNvidia(request, messages, nvidiaApiKey) {
           },
           body: JSON.stringify({
             model: MODEL,
-            messages,
+            messages: modelMessages,
             temperature: 1,
             top_p: 0.95,
             max_tokens: 16384,
@@ -169,7 +334,6 @@ function streamNvidia(request, messages, nvidiaApiKey) {
           try {
             const packet = JSON.parse(raw);
             const delta = packet.choices?.[0]?.delta;
-            // Reasoning text itself is never forwarded to the client. Only its real lifecycle is shown.
             const hasReasoning = (typeof delta?.reasoning_content === "string" && delta.reasoning_content) ||
               (typeof delta?.reasoning === "string" && delta.reasoning);
             if (hasReasoning && !reasoningReported) {
@@ -180,7 +344,7 @@ function streamNvidia(request, messages, nvidiaApiKey) {
               send({ type: "token", text: delta.content });
             }
           } catch {
-            // Ignore provider keepalive or non-JSON lines.
+            // ignore keepalive
           }
         };
 
@@ -201,7 +365,7 @@ function streamNvidia(request, messages, nvidiaApiKey) {
         if (!cancelled && !aborter.signal.aborted) send({ type: "done" });
       } catch (error) {
         if (!cancelled && !aborter.signal.aborted) {
-          console.error("NVIDIA stream failed", error?.message || error);
+          console.error("Chat stream failed", error?.message || error);
           sendError("stream_error", "The response stream was interrupted. Please try again.");
         }
       } finally {
@@ -221,18 +385,15 @@ function streamNvidia(request, messages, nvidiaApiKey) {
 
 async function handleChat(request, env) {
   const nvidiaApiKey = getNvidiaApiKey(env);
-  if (!nvidiaApiKey) return json({
-    type: "error", code: "not_configured",
-    error: "Cloudflare не передал секрет NVIDIA_API_KEY в текущий deployment. Проверьте, что Secret добавлен для Production, затем создайте новый deployment."
-  }, 503);
-
   const firebaseProjectId = getFirebaseProjectId(env);
+  if (!nvidiaApiKey) return json({ type: "error", code: "config", error: "NVIDIA_API_KEY is not configured." }, 500);
+
   const bearer = request.headers.get("authorization") || "";
   const token = bearer.match(/^Bearer\s+(.+)$/i)?.[1];
-  if (!token) return json({ type: "error", code: "unauthorized", error: "Войдите через Google, чтобы начать чат." }, 401);
+  if (!token) return json({ type: "error", code: "unauthorized", error: "Sign in to start chatting." }, 401);
   let user;
   try { user = await verifyFirebaseToken(token, firebaseProjectId); }
-  catch { return json({ type: "error", code: "unauthorized", error: "Не удалось проверить вход. Войдите в аккаунт ещё раз." }, 401); }
+  catch { return json({ type: "error", code: "unauthorized", error: "Could not verify sign-in. Please sign in again." }, 401); }
 
   if (!rateAllowed(user.uid, env)) {
     return json({
@@ -245,13 +406,16 @@ async function handleChat(request, env) {
   let body;
   try {
     const text = await request.text();
-    if (text.length > MAX_BODY) return json({ type: "error", code: "too_large", error: "Слишком большой запрос." }, 413);
+    if (text.length > MAX_BODY) return json({ type: "error", code: "too_large", error: "Request is too large." }, 413);
     body = JSON.parse(text);
-  } catch { return json({ type: "error", code: "bad_json", error: "Некорректный JSON." }, 400); }
-  const messages = validateMessages(body.messages);
-  if (!messages) return json({ type: "error", code: "invalid_messages", error: "Проверьте формат сообщения и попробуйте ещё раз." }, 400);
+  } catch { return json({ type: "error", code: "bad_json", error: "Invalid JSON." }, 400); }
 
-  return new Response(streamNvidia(request, messages, nvidiaApiKey), {
+  const messages = validateMessages(body.messages);
+  if (!messages) return json({ type: "error", code: "invalid_messages", error: "Invalid message format." }, 400);
+
+  const forceSearch = !!(body.forceSearch || body.search === true);
+
+  return new Response(streamChat(request, messages, env, { forceSearch }), {
     headers: {
       "content-type": "text/event-stream; charset=utf-8",
       "cache-control": "no-cache, no-transform",
@@ -271,13 +435,12 @@ export default {
       "access-control-max-age": "86400"
     }});
     if (url.pathname === "/api/health" && request.method === "GET") {
-      const nvidiaBindings = Object.keys(env || {}).filter(name => /^(NVIDIA_API_KEY|NVIDIA)$/i.test(name));
       return json({
         ok: true,
         name: "Ghost AI",
         model: MODEL,
         nvidiaConfigured: Boolean(getNvidiaApiKey(env)),
-        nvidiaBindings,
+        serperConfigured: Boolean(getSerperApiKey(env)),
         firebaseConfigured: Boolean(getFirebaseProjectId(env))
       });
     }

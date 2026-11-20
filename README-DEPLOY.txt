@@ -64,3 +64,16 @@ Dashboard drag-and-drop загружать нельзя.
 - Клиент отображает только серверные статусы, не определяет этап по тексту запроса. planFromInput() и циклическая смена фраз удалены.
 - Пока search/math/code/vision/tools не подключены к серверному lifecycle, эти статусы намеренно не отправляются. Они появятся только после реального запуска соответствующего инструмента.
 - Stop прерывает fetch stream через AbortController и скрывает активный статус локально.
+
+
+============================================================
+SERPER (Google Search) setup
+============================================================
+1. Create a key at https://serper.dev
+2. Cloudflare Pages → Settings → Environment variables (Production):
+   SERPER_API_KEY = your_serper_key
+3. Redeploy.
+4. Health check: GET /api/health should show "serperConfigured": true
+
+Search runs only when the question needs live web info (or forceSearch).
+Statuses "Checking the site…" / "Checking resources…" fire only on real Serper calls.

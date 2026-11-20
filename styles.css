@@ -602,3 +602,170 @@
 .chat-item { border: 0; color: var(--text); text-align: left; font-family: inherit; width: 100%; cursor: pointer; }
 
 body.no-animations *, body.no-animations *::before, body.no-animations *::after { animation-duration: 0s !important; transition-duration: 0s !important; scroll-behavior: auto !important; }
+
+
+/* --- Premium polish + sources + chat swipe --- */
+.tool.search { display: none !important; }
+
+.sources-block {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(255,255,255,0.06);
+}
+.sources-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 8px;
+}
+.sources-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.source-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(28,28,30,0.92);
+  text-decoration: none;
+  color: inherit;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.25);
+  transition: background .15s ease, transform .15s ease;
+}
+.source-card:active { background: rgba(44,44,46,0.95); transform: scale(0.99); }
+.source-title {
+  font-size: 13.5px;
+  font-weight: 500;
+  color: #f2f2f4;
+  line-height: 1.3;
+}
+.source-domain {
+  font-size: 11.5px;
+  color: #7ddea8;
+}
+
+pre.code-block {
+  margin: 12px 0;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: #0d0d0f;
+  overflow-x: auto;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.04);
+}
+pre.code-block code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.45;
+  color: #e8e8ea;
+  white-space: pre;
+}
+
+.swipe-row {
+  position: relative;
+  margin-bottom: 6px;
+  border-radius: 16px;
+  overflow: hidden;
+}
+.swipe-actions {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  justify-content: flex-end;
+  opacity: 0;
+  transition: opacity .15s ease;
+}
+.swipe-row.revealing .swipe-actions,
+.swipe-row.is-open .swipe-actions { opacity: 1; }
+.swipe-actions .del {
+  width: 76px;
+  border: none;
+  background: #ff3b30;
+  color: #fff;
+  display: grid;
+  place-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.swipe-actions .del svg {
+  width: 18px; height: 18px;
+  stroke: #fff; fill: none;
+  stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
+}
+.chat-item {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: 1fr 36px;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  padding: 12px 8px 12px 14px;
+  border: none;
+  border-radius: 16px;
+  background: #1c1c1e;
+  color: inherit;
+  text-align: left;
+  transition: transform .22s cubic-bezier(.2,.8,.2,1), background .15s ease;
+  touch-action: pan-y;
+}
+.chat-item.active { background: #2c2c2e; }
+.chat-item.open { background: #242426; }
+.chat-item .meta { min-width: 0; }
+.chat-item .title {
+  display: block;
+  font-size: 15px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chat-item .sub {
+  display: block;
+  margin-top: 3px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.chat-item .pencil {
+  width: 36px; height: 36px;
+  border: none; border-radius: 11px;
+  background: transparent;
+  color: rgba(255,255,255,0.38);
+  display: grid; place-items: center;
+  cursor: pointer;
+}
+.chat-item .pencil:active {
+  background: rgba(255,255,255,0.08);
+  color: #fff;
+}
+.chat-item .pencil svg {
+  width: 16px; height: 16px;
+  stroke: currentColor; fill: none;
+  stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
+}
+
+.side {
+  background: rgba(16,16,18,0.45) !important;
+  -webkit-backdrop-filter: blur(34px) saturate(170%) !important;
+  backdrop-filter: blur(34px) saturate(170%) !important;
+}
+
+.msg {
+  animation: msgIn .42s cubic-bezier(.2,.8,.2,1) both;
+}
+@keyframes msgIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+.msg.bot .body {
+  animation: bodyFade .35s ease both;
+}
+@keyframes bodyFade {
+  from { opacity: 0.35; }
+  to { opacity: 1; }
+}

@@ -59,7 +59,8 @@
     let safe = escapeHtml(value || '');
     safe = safe.replace(/```([\w+-]*)\n?([\s\S]*?)```/g, (_match, language, code) => {
       const key = `%%CODE_${blocks.length}%%`;
-      blocks.push(`<pre><code>${code.replace(/\n$/, '')}</code></pre>`);
+      const lang = escapeHtml(language || '');
+      blocks.push(`<pre class="code-block"${lang ? ` data-lang="${lang}"` : ''}><code>${code.replace(/\n$/, '')}</code></pre>`);
       return key;
     });
     safe = safe.replace(/^### (.+)$/gm, '<h3>$1</h3>')
@@ -141,8 +142,58 @@
     }
   }
 
+  let openSwipeId = null;
+  function closeAllSwipes() {
+    openSwipeId = null;
+    els.history.querySelectorAll('.swipe-row').forEach((row) => {
+      row.classList.remove('is-open', 'revealing');
+      const item = row.querySelector('.chat-item');
+      if (item) {
+        item.style.transition = 'transform .2s cubic-bezier(.2,.8,.2,1)';
+        item.style.transform = 'translateX(0)';
+        item.classList.remove('open');
+      }
+    });
+  }
+
+  async function renameChat(chat) {
+    const next = window.prompt('Rename chat', chat.title || 'New chat');
+    if (next == null) return;
+    const name = String(next).trim().slice(0, 60);
+    if (!name || !state.user || !state.db) return;
+    try {
+      await state.db.collection('users').doc(state.user.uid).collection('chats').doc(chat.id).set({ title: name, updatedAt: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      chat.title = name;
+      renderHistory();
+      toast('Renamed');
+    } catch (error) {
+      console.warn(error);
+      toast('Could not rename chat');
+    }
+  }
+
+  async function deleteChat(chat) {
+    if (!window.confirm('Delete "' + (chat.title || 'chat') + '"?')) return;
+    if (!state.user || !state.db) return;
+    try {
+      await state.db.collection('users').doc(state.user.uid).collection('chats').doc(chat.id).delete();
+      state.chats = state.chats.filter((c) => c.id !== chat.id);
+      if (state.activeChatId === chat.id) {
+        if (state.chats[0]) switchChat(state.chats[0].id);
+        else newChat();
+      } else {
+        renderHistory();
+      }
+      toast('Deleted');
+    } catch (error) {
+      console.warn(error);
+      toast('Could not delete chat');
+    }
+  }
+
   function renderHistory() {
     els.history.innerHTML = '';
+    openSwipeId = null;
     if (!state.user) {
       const empty = document.createElement('div');
       empty.style.cssText = 'padding:16px 12px;color:#8e8e93;font-size:13px;';
@@ -160,23 +211,95 @@
     state.chats.forEach((chat) => {
       const row = document.createElement('div');
       row.className = 'swipe-row';
-      const item = document.createElement('button');
-      item.type = 'button';
-      item.className = `chat-item${chat.id === state.activeChatId ? ' active' : ''}`;
+      row.innerHTML =
+        '<div class="swipe-actions"><button type="button" class="del" aria-label="Delete">' +
+        '<svg viewBox="0 0 24 24"><path d="M4 7h16"/><path d="M10 11v6M14 11v6"/><path d="M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12"/><path d="M9 7V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/></svg>' +
+        '<span>Delete</span></button></div>';
+      const item = document.createElement('div');
+      item.className = 'chat-item' + (chat.id === state.activeChatId ? ' active' : '');
       item.dataset.chatId = chat.id;
-      const meta = document.createElement('span');
+      const meta = document.createElement('div');
       meta.className = 'meta';
-      const title = document.createElement('span');
+      const title = document.createElement('div');
       title.className = 'title';
       title.textContent = chat.title || 'New chat';
-      const sub = document.createElement('span');
+      const sub = document.createElement('div');
       sub.className = 'sub';
       const date = chat.updatedAt?.toDate ? chat.updatedAt.toDate() : (chat.updatedAt ? new Date(chat.updatedAt) : null);
       sub.textContent = date && !Number.isNaN(date.getTime()) ? date.toLocaleDateString() : 'Saved chat';
       meta.append(title, sub);
-      item.appendChild(meta);
+      const pencil = document.createElement('button');
+      pencil.type = 'button';
+      pencil.className = 'pencil';
+      pencil.setAttribute('aria-label', 'Rename');
+      pencil.innerHTML = '<svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4 11.5-11.5z"/></svg>';
+      item.append(meta, pencil);
       row.appendChild(item);
       els.history.appendChild(row);
+
+      const DELETE_W = 76;
+      let startX = 0, baseX = 0, dx = 0, dragging = false, axis = null;
+      const isOpen = () => item.classList.contains('open');
+      const setX = (x, animate) => {
+        dx = Math.min(0, Math.max(-DELETE_W, x));
+        item.style.transition = animate ? 'transform .22s cubic-bezier(.2,.8,.2,1)' : 'none';
+        item.style.transform = 'translateX(' + dx + 'px)';
+        if (dx < -4) row.classList.add('revealing');
+        else row.classList.remove('revealing');
+      };
+      const openDelete = () => {
+        setX(-DELETE_W, true);
+        item.classList.add('open');
+        row.classList.add('is-open', 'revealing');
+        openSwipeId = chat.id;
+      };
+      const closeDelete = (animate) => {
+        setX(0, animate !== false);
+        item.classList.remove('open');
+        row.classList.remove('is-open', 'revealing');
+        if (openSwipeId === chat.id) openSwipeId = null;
+      };
+      const onStart = (x) => {
+        if (openSwipeId && openSwipeId !== chat.id) closeAllSwipes();
+        startX = x; baseX = isOpen() ? -DELETE_W : 0; dx = baseX; dragging = true; axis = null;
+        item.style.transition = 'none';
+      };
+      const onMove = (x) => {
+        if (!dragging) return;
+        const mx = x - startX;
+        if (axis === null && Math.abs(mx) > 7) axis = 'x';
+        if (axis !== 'x') return;
+        setX(baseX + mx, false);
+      };
+      const onEnd = () => {
+        if (!dragging) return;
+        dragging = false;
+        if (axis !== 'x') { if (!isOpen()) closeDelete(false); return; }
+        if (dx < -DELETE_W * 0.35) openDelete();
+        else closeDelete(true);
+      };
+      item.addEventListener('touchstart', (e) => onStart(e.touches[0].clientX), { passive: true });
+      item.addEventListener('touchmove', (e) => {
+        onMove(e.touches[0].clientX);
+        if (axis === 'x') e.preventDefault();
+      }, { passive: false });
+      item.addEventListener('touchend', onEnd);
+      item.addEventListener('touchcancel', onEnd);
+      meta.addEventListener('click', () => {
+        if (isOpen()) { closeDelete(true); return; }
+        if (axis === 'x' && Math.abs(dx - baseX) > 8) return;
+        switchChat(chat.id);
+        closeSide();
+      });
+      pencil.addEventListener('click', (e) => {
+        e.preventDefault(); e.stopPropagation();
+        if (isOpen()) closeDelete(true);
+        renameChat(chat);
+      });
+      row.querySelector('.del').addEventListener('click', (e) => {
+        e.preventDefault(); e.stopPropagation();
+        deleteChat(chat);
+      });
     });
   }
 
@@ -202,6 +325,7 @@
         const body = document.createElement('div');
         body.className = 'body';
         body.innerHTML = message.content ? formatMessage(message.content) : '';
+        if (message.sources?.length) body.insertAdjacentHTML('beforeend', renderSourcesHtml(message.sources));
         wrap.appendChild(body);
         if (message.content && !message.error) wrap.appendChild(createActions(message.content, index));
         if (message.error && message.retry) {
@@ -397,17 +521,33 @@
     if (requestId !== state.requestSeq || !packet || typeof packet !== 'object') return;
     if (packet.type === 'status') {
       window.GhostAgent.emit('status', packet.label || packet.stage || 'Thinking…');
+    } else if (packet.type === 'sources') {
+      const items = Array.isArray(packet.items) ? packet.items : [];
+      const assistant = state.messages[state.messages.length - 1];
+      if (assistant?.role === 'assistant') assistant.sources = items;
+      renderSourcesLive(items);
     } else if (packet.type === 'token') {
       AgentUI.hide();
       if (typeof packet.text === 'string' && packet.text) {
         state.streamText += packet.text;
         const assistant = state.messages[state.messages.length - 1];
         if (assistant?.role === 'assistant') assistant.content = state.streamText;
-        if (state.streamBody) state.streamBody.textContent += packet.text;
+        // Smooth stream: append text, re-format lightly without full re-render lockup
+        if (state.streamBody) {
+          state.streamBody.textContent = state.streamText;
+        }
         scrollBottom();
       }
     } else if (packet.type === 'done') {
       window.GhostAgent.emit('done');
+      // Final pretty render (markdown / sources) once, not every token
+      const assistant = state.messages[state.messages.length - 1];
+      if (assistant?.role === 'assistant' && state.streamBody) {
+        state.streamBody.innerHTML = formatMessage(assistant.content || '');
+        if (assistant.sources?.length) {
+          state.streamBody.insertAdjacentHTML('beforeend', renderSourcesHtml(assistant.sources));
+        }
+      }
     } else if (packet.type === 'error') {
       window.GhostAgent.emit('error');
       const error = new Error(packet.message || 'The server could not complete the request.');
@@ -415,6 +555,25 @@
       error.retryAfterSec = Number(packet.retryAfterSec) || 0;
       throw error;
     }
+  }
+
+  function renderSourcesHtml(items) {
+    if (!items || !items.length) return '';
+    const cards = items.slice(0, 8).map((s) => {
+      const title = escapeHtml(s.title || s.domain || s.url || 'Source');
+      const domain = escapeHtml(s.domain || '');
+      const url = escapeHtml(s.url || '#');
+      return '<a class="source-card" href="' + url + '" target="_blank" rel="noopener noreferrer">' +
+        '<span class="source-title">' + title + '</span>' +
+        (domain ? '<span class="source-domain">' + domain + '</span>' : '') +
+        '</a>';
+    }).join('');
+    return '<div class="sources-block"><div class="sources-label">Sources</div><div class="sources-list">' + cards + '</div></div>';
+  }
+
+  function renderSourcesLive(items) {
+    // optional subtle status only — cards appear after answer
+    if (!items?.length) return;
   }
 
   async function sendMessage(rawText) {
@@ -667,6 +826,7 @@
   $('btnProfile').onclick = openProfile;
   $('btnAuth').onclick = () => state.user ? state.auth.signOut().then(() => toast('Signed out.')) : openAuth('login');
   els.history.addEventListener('click', (event) => {
+    if (event.target.closest('.pencil, .del, .swipe-actions')) return;
     const item = event.target.closest('[data-chat-id]');
     if (item) switchChat(item.dataset.chatId);
   });
@@ -678,12 +838,8 @@
     if (shouldSend) { event.preventDefault(); sendMessage(els.input.value); }
   });
 
-  // Search remains a visual control only until a real search tool is connected.
-  els.search.onclick = () => {
-    tapHaptic();
-    els.search.classList.toggle('active');
-    toast('Search tool is not connected yet.');
-  };
+  // Search is automatic on the server; no manual search mode.
+  if (els.search) { els.search.style.display = 'none'; }
   $('btnAttach').onclick = () => toast('Attachments are not connected yet.');
 
   // Settings.
