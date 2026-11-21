@@ -164,41 +164,21 @@ async function fetchWithTimeout(url, options = {}, parentSignal, timeoutMs = 800
   }
 }
 
-function normalizeSearchResults(rows, provider) {
+function normalizeSearchResults(rows) {
   const results = [];
   const seen = new Set();
   for (const row of Array.isArray(rows) ? rows : []) {
-    const url = safePublicHttpsUrl(provider === "Tavily" ? row?.url : row?.link);
+    const url = safePublicHttpsUrl(row?.link);
     if (!url || seen.has(url.href)) continue;
     seen.add(url.href);
-    const snippet = provider === "Tavily"
-      ? (row?.content || row?.raw_content || "")
-      : (row?.snippet || row?.description || "");
     results.push({
       title: String(row?.title || url.hostname).replace(/\s+/g, " ").slice(0, 180),
       url: url.href,
       domain: url.hostname,
-      snippet: String(snippet).replace(/\s+/g, " ").slice(0, 900)
+      snippet: String(row?.snippet || row?.description || "").replace(/\s+/g, " ").slice(0, 900)
     });
     if (results.length >= MAX_SEARCH_RESULTS) break;
   }
-  return results;
-}
-
-async function searchTavily(query, apiKey, signal) {
-  const response = await fetchWithTimeout("https://api.tavily.com/search", {
-    method: "POST",
-    headers: { "content-type": "application/json", accept: "application/json" },
-    body: JSON.stringify({
-      api_key: apiKey, query: query.slice(0, 500), search_depth: "advanced",
-      topic: "general", max_results: MAX_SEARCH_RESULTS,
-      include_answer: false, include_raw_content: false
-    })
-  }, signal, 9000);
-  if (!response.ok) throw new Error(`Tavily returned HTTP ${response.status}`);
-  const data = await response.json();
-  const results = normalizeSearchResults(data?.results, "Tavily");
-  if (!results.length) throw new Error("Tavily returned no usable results");
   return results;
 }
 
@@ -216,34 +196,30 @@ async function searchSerper(query, apiKey, signal) {
 }
 
 async function searchWebProviders(query, env, signal) {
-  const tavilyKey = typeof env?.TAVILY_API_KEY === "string" ? env.TAVILY_API_KEY.trim() : "";
   const serperKey = typeof env?.SERPER_API_KEY === "string" ? env.SERPER_API_KEY.trim() : "";
-  const failures = [];
-  let attempted = 0;
-  if (tavilyKey) {
-    attempted++;
-    try {
-      const results = await searchTavily(query, tavilyKey, signal);
-      return { results, diagnostics: { provider: "Tavily", ok: true, attempted, failed: 0, fallbackUsed: false } };
-    } catch (error) {
-      failures.push(String(error?.message || error).slice(0, 180));
-      console.warn("Tavily search failed:", failures[failures.length - 1]);
-    }
+  if (!serperKey) {
+    return {
+      results: [],
+      diagnostics: {
+        provider: "Serper", ok: false, attempted: 0, failed: 0,
+        fallbackUsed: false, reason: "Search is not configured. Add SERPER_API_KEY in Cloudflare."
+      }
+    };
   }
-  if (serperKey) {
-    attempted++;
-    try {
-      const results = await searchSerper(query, serperKey, signal);
-      return { results, diagnostics: { provider: "Serper", ok: true, attempted, failed: failures.length, fallbackUsed: Boolean(tavilyKey) } };
-    } catch (error) {
-      failures.push(String(error?.message || error).slice(0, 180));
-      console.warn("Serper search failed:", failures[failures.length - 1]);
-    }
+  try {
+    const results = await searchSerper(query, serperKey, signal);
+    return {
+      results,
+      diagnostics: { provider: "Serper", ok: true, attempted: 1, failed: 0, fallbackUsed: false }
+    };
+  } catch (error) {
+    const reason = String(error?.message || error).slice(0, 180);
+    console.warn("Serper search failed:", reason);
+    return {
+      results: [],
+      diagnostics: { provider: "Serper", ok: false, attempted: 1, failed: 1, fallbackUsed: false, reason }
+    };
   }
-  const reason = !tavilyKey && !serperKey
-    ? "Search is not configured. Add TAVILY_API_KEY and/or SERPER_API_KEY in Cloudflare."
-    : failures.join("; ") || "No search provider returned usable results.";
-  return { results: [], diagnostics: { provider: "Tavily/Serper", ok: false, attempted, failed: failures.length, fallbackUsed: Boolean(tavilyKey && serperKey), reason } };
 }
 
 async function readBoundedBody(response, limit) {
@@ -407,14 +383,14 @@ function streamChat(request, messages, env) {
         let webSearchFailed = false;
         const userQuery = lastUserText(messages);
         if (shouldSearchWeb(userQuery)) {
-          send({ type: "status", stage: "searching", label: "Ищу в интернете (Tavily)…" });
+          send({ type: "status", stage: "searching", label: "Ищу в интернете (Serper)…" });
           try {
             const research = await researchWeb(userQuery, env, aborter.signal);
             webContext = research.context;
             webSources = research.results;
             if (webSources.length) send({ type: "sources", items: webSources });
             const d = research.diagnostics || {};
-            send({ type: "search_diagnostics", ok: Boolean(d.ok), provider: d.provider || "Tavily/Serper",
+            send({ type: "search_diagnostics", ok: Boolean(d.ok), provider: d.provider || "Serper",
               attempted: d.attempted || 0, failed: d.failed || 0, fallbackUsed: Boolean(d.fallbackUsed),
               results: webSources.length, pagesAttempted: d.pagesAttempted || 0, pagesRead: d.pagesRead || 0,
               reason: d.ok ? null : (d.reason || "Поисковые провайдеры не ответили.") });
@@ -427,7 +403,7 @@ function streamChat(request, messages, env) {
           } catch (error) {
             webSearchFailed = true;
             console.warn("Web research unavailable:", error?.message || error);
-            send({ type: "search_diagnostics", ok: false, provider: "Tavily/Serper", attempted: 0,
+            send({ type: "search_diagnostics", ok: false, provider: "Serper", attempted: 0,
               failed: 0, fallbackUsed: false, results: 0, pagesAttempted: 0, pagesRead: 0,
               reason: String(error?.message || error).slice(0, 240) });
             send({ type: "status", stage: "search_failed", label: "Поиск временно недоступен — отвечу без актуальных данных." });
@@ -592,11 +568,8 @@ export default {
         model: MODEL,
         nvidiaConfigured: Boolean(getNvidiaApiKey(env)),
         firebaseConfigured: Boolean(getFirebaseProjectId(env)),
-        searchEnabled: Boolean(
-          (typeof env?.TAVILY_API_KEY === "string" && env.TAVILY_API_KEY.trim()) ||
-          (typeof env?.SERPER_API_KEY === "string" && env.SERPER_API_KEY.trim())
-        ),
-        tavilyConfigured: Boolean(typeof env?.TAVILY_API_KEY === "string" && env.TAVILY_API_KEY.trim()),
+        searchEnabled: Boolean(typeof env?.SERPER_API_KEY === "string" && env.SERPER_API_KEY.trim()),
+        tavilyConfigured: false,
         serperConfigured: Boolean(typeof env?.SERPER_API_KEY === "string" && env.SERPER_API_KEY.trim())
       });
     }
