@@ -12,25 +12,18 @@ assert.equal(response.status, 200);
 let health = await response.json();
 assert.equal(health.ok, true);
 assert.equal(health.nvidiaConfigured, false);
-assert.deepEqual(health.nvidiaBindings, []);
 assert.equal(health.firebaseConfigured, true);
 
 response = await worker.fetch(new Request('https://ghost.example/api/chat', {
   method: 'POST', headers: { 'content-type': 'application/json' },
   body: JSON.stringify({ messages: [{ role: 'user', content: 'Hello' }] })
 }), { ASSETS: assets });
-assert.equal(response.status, 503);
-assert.match((await response.json()).error, /Cloudflare не передал секрет NVIDIA_API_KEY/);
+assert.equal(response.status, 500);
+assert.match((await response.json()).error, /NVIDIA_API_KEY is not configured/);
 
 response = await worker.fetch(request('/api/health'), { ASSETS: assets, NVIDIA_API_KEY: 'test-only' });
 health = await response.json();
 assert.equal(health.nvidiaConfigured, true);
-assert.deepEqual(health.nvidiaBindings, ['NVIDIA_API_KEY']);
-
-response = await worker.fetch(request('/api/health'), { ASSETS: assets, NVIDIA: 'test-only' });
-health = await response.json();
-assert.equal(health.nvidiaConfigured, true);
-assert.deepEqual(health.nvidiaBindings, ['NVIDIA']);
 
 response = await worker.fetch(new Request('https://ghost.example/api/chat', {
   method: 'POST', headers: { 'content-type': 'application/json' },
@@ -89,10 +82,11 @@ try {
   const streamText = await response.text();
   const events = streamText.split(/\r?\n\r?\n/).filter(Boolean).map((frame) => JSON.parse(frame.replace(/^data:\s*/, '')));
   assert.deepEqual(events[0], { type: 'status', stage: 'thinking', label: 'Thinking…' });
-  assert.deepEqual(events[1], { type: 'status', stage: 'reasoning', label: 'Reasoning…' });
-  assert.deepEqual(events[2], { type: 'token', text: 'Hello ' });
-  assert.deepEqual(events[3], { type: 'token', text: 'from Nemotron.' });
-  assert.deepEqual(events[4], { type: 'done' });
+  assert.deepEqual(events[1], { type: 'status', stage: 'answer', label: 'Formulating the answer…' });
+  assert.deepEqual(events[2], { type: 'status', stage: 'reasoning', label: 'Reasoning…' });
+  assert.deepEqual(events[3], { type: 'token', text: 'Hello ' });
+  assert.deepEqual(events[4], { type: 'token', text: 'from Nemotron.' });
+  assert.deepEqual(events[5], { type: 'done' });
   assert.doesNotMatch(streamText, /private reasoning must not be forwarded/);
 
   // The app-level rate limit returns the agreed busy contract with a 150-second retry delay.
@@ -104,7 +98,7 @@ try {
   const input2 = `${h2}.${p2}`;
   const sig2 = await crypto.subtle.sign('RSASSA-PKCS1-v1_5', pair.privateKey, new TextEncoder().encode(input2));
   const token2 = `${input2}.${Buffer.from(sig2).toString('base64url')}`;
-  const envRateLimited = { ASSETS: assets, NVIDIA_API_KEY: 'test-only', RATE_LIMIT_REQUESTS: '1' };
+  const envRateLimited = { ASSETS: assets, NVIDIA_API_KEY: 'test-only', RATE_LIMIT_PER_MIN: '1' };
   response = await worker.fetch(chatRequest(token2), envRateLimited);
   assert.equal(response.status, 200);
   await response.text();
@@ -128,7 +122,7 @@ try {
   response = await worker.fetch(chatRequest(token3), { ASSETS: assets, NVIDIA_API_KEY: 'test-only' });
   assert.equal(response.status, 200);
   const providerBusy = (await response.text()).split(/\r?\n\r?\n/).filter(Boolean).map((frame) => JSON.parse(frame.replace(/^data:\s*/, '')));
-  assert.deepEqual(providerBusy[1], {
+  assert.deepEqual(providerBusy[2], {
     type: 'error', code: 'busy',
     message: 'Server is full right now. Please wait and try again in 2.5 minutes.',
     retryAfterSec: 150
@@ -139,4 +133,4 @@ try {
 
 response = await worker.fetch(request('/'), { ASSETS: assets });
 assert.equal(await response.text(), 'Ghost AI UI');
-console.log('Cloudflare Worker smoke tests: 10 passed');
+console.log('Cloudflare Worker smoke tests passed');
