@@ -64,6 +64,7 @@ globalThis.fetch = async (url, options = {}) => {
     return new Response(JSON.stringify({ keys: [jwk] }), { headers: { 'cache-control': 'max-age=3600' } });
   }
   if (target.startsWith('https://search.example.com/search?')) {
+    if (upstreamMode === 'search-down') return new Response('temporarily unavailable', { status: 503 });
     return new Response(JSON.stringify({
       results: [{
         title: 'ChatClaud Search release notes',
@@ -102,7 +103,7 @@ try {
   const streamText = await response.text();
   const events = streamText.split(/\r?\n\r?\n/).filter(Boolean).map((frame) => JSON.parse(frame.replace(/^data:\s*/, '')));
   assert.deepEqual(events[0], { type: 'status', stage: 'thinking', label: 'Thinking…' });
-  assert.deepEqual(events[1], { type: 'status', stage: 'answer', label: 'Formulating the answer…' });
+  assert.deepEqual(events[1], { type: 'status', stage: 'answer', label: 'Формулирую ответ…' });
   assert.deepEqual(events[2], { type: 'status', stage: 'reasoning', label: 'Reasoning…' });
   assert.deepEqual(events[3], { type: 'token', text: 'Hello ' });
   assert.deepEqual(events[4], { type: 'token', text: 'from Nemotron.' });
@@ -123,9 +124,28 @@ try {
   assert.equal(response.status, 200);
   const searchStream = await response.text();
   assert.match(searchStream, /"type":"sources"/);
+  assert.match(searchStream, /"type":"search_diagnostics","ok":true/);
+  assert.match(searchStream, /"pagesRead":1/);
   assert.match(searchStream, /ChatClaud Search release notes/);
   assert.match(lastNvidiaBody.messages.map((m) => m.content).join('\n'), /Verified page text from the website/);
   assert.doesNotMatch(lastNvidiaBody.messages.map((m) => m.content).join('\n'), /Navigation ignored|ignoreThisScript/);
+
+  // Search-provider failure is visible and explicitly disclosed to Nemotron.
+  upstreamMode = 'search-down';
+  response = await worker.fetch(new Request('https://ghost.example/api/chat', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+    body: JSON.stringify({ messages: [{ role: 'user', content: 'Find the latest news today about ChatClaud Search' }] })
+  }), {
+    ASSETS: assets, NVIDIA_API_KEY: 'test-only', SEARXNG_URL: 'https://search.example.com'
+  });
+  assert.equal(response.status, 200);
+  const failedSearchStream = await response.text();
+  assert.match(failedSearchStream, /"stage":"search_failed"/);
+  assert.match(failedSearchStream, /"type":"search_diagnostics","ok":false/);
+  assert.match(failedSearchStream, /SearXNG returned 503/);
+  assert.match(lastNvidiaBody.messages.map((m) => m.content).join('\n'), /automatic web search was attempted but failed/i);
+  upstreamMode = 'ok';
 
   // The app-level rate limit returns the agreed busy contract with a 150-second retry delay.
   const h2 = b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT', kid: jwk.kid }));

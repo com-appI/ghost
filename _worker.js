@@ -240,19 +240,40 @@ async function querySearxng(base, query, signal) {
 
 async function searchPublicSearxng(query, env, signal) {
   const candidates = await getSearxngCandidates(env, signal);
+  if (!candidates.length) {
+    return { results: [], diagnostics: {
+      provider: "SearXNG", ok: false, attempted: 0, failed: 0,
+      reason: "No valid public SearXNG instances were discovered."
+    }};
+  }
+
   const controllers = [];
   const attempts = candidates.slice(0, 8).map((base) => {
     const controller = new AbortController();
     const abortParent = () => controller.abort();
     if (signal?.aborted) controller.abort();
     else signal?.addEventListener("abort", abortParent, { once: true });
-    controllers.push({ controller, signal, abortParent });
-    return querySearxng(base, query, controller.signal);
+    controllers.push({ controller, signal, abortParent, base });
+    return querySearxng(base, query, controller.signal).then((results) => ({ base, results }))
+      .catch((error) => {
+        throw new Error(`${new URL(base).hostname}: ${String(error?.message || error).slice(0, 180)}`);
+      });
   });
+
   try {
-    return await Promise.any(attempts);
-  } catch {
-    return [];
+    const winner = await Promise.any(attempts);
+    return { results: winner.results, diagnostics: {
+      provider: "SearXNG", ok: true, instance: new URL(winner.base).hostname,
+      attempted: controllers.length
+    }};
+  } catch (error) {
+    const failures = Array.isArray(error?.errors) ? error.errors : [];
+    const details = failures.slice(0, 4).map((item) => String(item?.message || item).slice(0, 180));
+    return { results: [], diagnostics: {
+      provider: "SearXNG", ok: false, attempted: controllers.length,
+      failed: failures.length || controllers.length,
+      reason: details.length ? details.join("; ") : "All search instances failed or returned no usable results."
+    }};
   } finally {
     for (const item of controllers) {
       item.signal?.removeEventListener("abort", item.abortParent);
@@ -356,11 +377,15 @@ async function readWebPage(value, signal) {
 }
 
 async function researchWeb(query, env, signal) {
-  const results = await searchPublicSearxng(query, env, signal);
-  if (!results.length) return { results: [], context: "" };
+  const search = await searchPublicSearxng(query, env, signal);
+  const results = search.results;
+  if (!results.length) {
+    return { results: [], context: "", diagnostics: {
+      ...search.diagnostics, pagesAttempted: 0, pagesRead: 0
+    }};
+  }
   const pages = await Promise.all(results.slice(0, 3).map(async (item) => ({
-    url: item.url,
-    text: await readWebPage(item.url, signal)
+    url: item.url, text: await readWebPage(item.url, signal)
   })));
   const pageByUrl = new Map(pages.filter((item) => item.text).map((item) => [item.url, item.text]));
   const context = results.map((item, index) => {
@@ -370,9 +395,13 @@ async function researchWeb(query, env, signal) {
       `URL: ${item.url}`,
       `Search snippet: ${item.snippet || "(none)"}`,
       pageText ? `Fetched page text: ${pageText}` : "Page text could not be fetched; use only the search snippet."
-    ].join("\n");
-  }).join("\n\n").slice(0, 22000);
-  return { results, context };
+    ].join("\\n");
+  }).join("\\n\\n").slice(0, 22000);
+  return { results, context, diagnostics: {
+    ...search.diagnostics,
+    pagesAttempted: Math.min(results.length, 3),
+    pagesRead: pageByUrl.size
+  }};
 }
 
 function withSystemIdentity(messages, webContext = "") {
@@ -387,6 +416,13 @@ function withSystemIdentity(messages, webContext = "") {
     });
   }
   return cloned;
+}
+
+function withSearchFailureNotice(messages, pagesFound) {
+  const note = pagesFound
+    ? "The automatic web search found search results, but the pages could not be read. Be transparent: cite no unsupported details, and explain that page access failed."
+    : "The automatic web search was attempted but failed. Be transparent: do not claim you searched successfully, do not invent current facts or URLs, and tell the user that live web search is temporarily unavailable.";
+  return [...messages, { role: "user", content: `[Internal search status for this turn: ${note}]` }];
 }
 
 function streamChat(request, messages, env) {
@@ -415,20 +451,51 @@ function streamChat(request, messages, env) {
         send({ type: "status", stage: "thinking", label: "Thinking…" });
         let webContext = "";
         let webSources = [];
+        let webSearchFailed = false;
         const userQuery = lastUserText(messages);
         if (shouldSearchWeb(userQuery)) {
-          send({ type: "status", stage: "searching", label: "Searching the web…" });
+          send({ type: "status", stage: "searching", label: "Ищу в интернете…" });
           try {
             const research = await researchWeb(userQuery, env, aborter.signal);
             webContext = research.context;
             webSources = research.results;
             if (webSources.length) send({ type: "sources", items: webSources });
+            const diagnostics = research.diagnostics || {};
+            send({
+              type: "search_diagnostics",
+              ok: Boolean(diagnostics.ok),
+              provider: diagnostics.provider || "SearXNG",
+              attempted: diagnostics.attempted || 0,
+              failed: diagnostics.failed || 0,
+              results: webSources.length,
+              pagesAttempted: diagnostics.pagesAttempted || 0,
+              pagesRead: diagnostics.pagesRead || 0,
+              instance: diagnostics.instance || null,
+              reason: diagnostics.ok ? null : (diagnostics.reason || "Поисковые серверы не ответили.")
+            });
+            if (!webSources.length) {
+              webSearchFailed = true;
+              send({ type: "status", stage: "search_failed", label: "Поиск временно недоступен — отвечу без актуальных данных." });
+            } else if (!webContext) {
+              webSearchFailed = true;
+              send({ type: "status", stage: "pages_unavailable", label: "Результаты найдены, но сайты не удалось прочитать." });
+            }
           } catch (error) {
+            webSearchFailed = true;
             console.warn("Web research unavailable:", error?.message || error);
+            send({
+              type: "search_diagnostics", ok: false, provider: "SearXNG",
+              attempted: 0, failed: 0, results: 0, pagesAttempted: 0, pagesRead: 0,
+              reason: String(error?.message || error).slice(0, 240)
+            });
+            send({ type: "status", stage: "search_failed", label: "Поиск временно недоступен — отвечу без актуальных данных." });
           }
         }
         if (aborter.signal.aborted) return;
-        send({ type: "status", stage: "answer", label: "Formulating the answer…" });
+        send({ type: "status", stage: "answer", label: "Формулирую ответ…" });
+        const effectiveMessages = webSearchFailed
+          ? withSearchFailureNotice(messages, webSources.length > 0)
+          : messages;
 
         const upstream = await fetch(NVIDIA_URL, {
           method: "POST",
@@ -439,7 +506,7 @@ function streamChat(request, messages, env) {
           },
           body: JSON.stringify({
             model: MODEL,
-            messages: withSystemIdentity(messages, webContext),
+            messages: withSystemIdentity(effectiveMessages, webContext),
             temperature: 1,
             top_p: 0.95,
             max_tokens: 16384,
