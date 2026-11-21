@@ -13,6 +13,8 @@ let health = await response.json();
 assert.equal(health.ok, true);
 assert.equal(health.nvidiaConfigured, false);
 assert.equal(health.firebaseConfigured, true);
+assert.equal(health.searchEnabled, true);
+assert.equal(health.preferredSearchConfigured, false);
 
 response = await worker.fetch(new Request('https://ghost.example/api/chat', {
   method: 'POST', headers: { 'content-type': 'application/json' },
@@ -24,6 +26,8 @@ assert.match((await response.json()).error, /NVIDIA_API_KEY is not configured/);
 response = await worker.fetch(request('/api/health'), { ASSETS: assets, NVIDIA_API_KEY: 'test-only' });
 health = await response.json();
 assert.equal(health.nvidiaConfigured, true);
+assert.equal(health.searchEnabled, true);
+assert.equal(health.preferredSearchConfigured, false);
 
 response = await worker.fetch(new Request('https://ghost.example/api/chat', {
   method: 'POST', headers: { 'content-type': 'application/json' },
@@ -53,13 +57,29 @@ const token = `${signingInput}.${Buffer.from(signature).toString('base64url')}`;
 
 const originalFetch = globalThis.fetch;
 let upstreamMode = 'ok';
+let lastNvidiaBody = null;
 globalThis.fetch = async (url, options = {}) => {
   const target = String(url);
   if (target.includes('securetoken@system.gserviceaccount.com')) {
     return new Response(JSON.stringify({ keys: [jwk] }), { headers: { 'cache-control': 'max-age=3600' } });
   }
+  if (target.startsWith('https://search.example.com/search?')) {
+    return new Response(JSON.stringify({
+      results: [{
+        title: 'ChatClaud Search release notes',
+        url: 'https://example.org/release-notes',
+        content: 'A short search result snippet.'
+      }]
+    }), { headers: { 'content-type': 'application/json' } });
+  }
+  if (target === 'https://example.org/release-notes') {
+    return new Response('<html><body><nav>Navigation ignored</nav><main><h1>Release notes</h1><p>Verified page text from the website.</p></main><script>ignoreThisScript()</script></body></html>', {
+      headers: { 'content-type': 'text/html; charset=utf-8' }
+    });
+  }
   if (target.includes('integrate.api.nvidia.com')) {
     if (upstreamMode === 'busy') return new Response('overloaded', { status: 429 });
+    lastNvidiaBody = JSON.parse(options.body);
     const frames = [
       { choices: [{ delta: { reasoning_content: 'private reasoning must not be forwarded' } }] },
       { choices: [{ delta: { content: 'Hello ' } }] },
@@ -88,6 +108,24 @@ try {
   assert.deepEqual(events[4], { type: 'token', text: 'from Nemotron.' });
   assert.deepEqual(events[5], { type: 'done' });
   assert.doesNotMatch(streamText, /private reasoning must not be forwarded/);
+  assert.doesNotMatch(streamText, /Searching the web/);
+  assert.doesNotMatch(streamText, /"type":"sources"/);
+
+  // Smart search should run for a freshness-sensitive request, read the result page,
+  // emit source cards, and pass fetched page text to Nemotron.
+  response = await worker.fetch(new Request('https://ghost.example/api/chat', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+    body: JSON.stringify({ messages: [{ role: 'user', content: 'Find the latest news today about ChatClaud Search' }] })
+  }), {
+    ASSETS: assets, NVIDIA_API_KEY: 'test-only', SEARXNG_URL: 'https://search.example.com'
+  });
+  assert.equal(response.status, 200);
+  const searchStream = await response.text();
+  assert.match(searchStream, /"type":"sources"/);
+  assert.match(searchStream, /ChatClaud Search release notes/);
+  assert.match(lastNvidiaBody.messages.map((m) => m.content).join('\n'), /Verified page text from the website/);
+  assert.doesNotMatch(lastNvidiaBody.messages.map((m) => m.content).join('\n'), /Navigation ignored|ignoreThisScript/);
 
   // The app-level rate limit returns the agreed busy contract with a 150-second retry delay.
   const h2 = b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT', kid: jwk.kid }));
@@ -130,6 +168,12 @@ try {
 } finally {
   globalThis.fetch = originalFetch;
 }
+
+response = await worker.fetch(request('/api/health'), {
+  ASSETS: assets, NVIDIA_API_KEY: 'test-only', SEARXNG_URL: 'https://search.example.com'
+});
+health = await response.json();
+assert.equal(health.preferredSearchConfigured, true);
 
 response = await worker.fetch(request('/'), { ASSETS: assets });
 assert.equal(await response.text(), 'Ghost AI UI');
