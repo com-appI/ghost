@@ -13,8 +13,9 @@ let health = await response.json();
 assert.equal(health.ok, true);
 assert.equal(health.nvidiaConfigured, false);
 assert.equal(health.firebaseConfigured, true);
-assert.equal(health.searchEnabled, true);
-assert.equal(health.preferredSearchConfigured, false);
+assert.equal(health.searchEnabled, false);
+assert.equal(health.tavilyConfigured, false);
+assert.equal(health.serperConfigured, false);
 
 response = await worker.fetch(new Request('https://ghost.example/api/chat', {
   method: 'POST', headers: { 'content-type': 'application/json' },
@@ -26,8 +27,9 @@ assert.match((await response.json()).error, /NVIDIA_API_KEY is not configured/);
 response = await worker.fetch(request('/api/health'), { ASSETS: assets, NVIDIA_API_KEY: 'test-only' });
 health = await response.json();
 assert.equal(health.nvidiaConfigured, true);
-assert.equal(health.searchEnabled, true);
-assert.equal(health.preferredSearchConfigured, false);
+assert.equal(health.searchEnabled, false);
+assert.equal(health.tavilyConfigured, false);
+assert.equal(health.serperConfigured, false);
 
 response = await worker.fetch(new Request('https://ghost.example/api/chat', {
   method: 'POST', headers: { 'content-type': 'application/json' },
@@ -63,15 +65,19 @@ globalThis.fetch = async (url, options = {}) => {
   if (target.includes('securetoken@system.gserviceaccount.com')) {
     return new Response(JSON.stringify({ keys: [jwk] }), { headers: { 'cache-control': 'max-age=3600' } });
   }
-  if (target.startsWith('https://search.example.com/search?')) {
-    if (upstreamMode === 'search-down') return new Response('temporarily unavailable', { status: 503 });
-    return new Response(JSON.stringify({
-      results: [{
-        title: 'ChatClaud Search release notes',
-        url: 'https://example.org/release-notes',
-        content: 'A short search result snippet.'
-      }]
-    }), { headers: { 'content-type': 'application/json' } });
+  if (target === 'https://api.tavily.com/search') {
+    if (upstreamMode === 'search-down' || upstreamMode === 'tavily-down') return new Response('temporarily unavailable', { status: 503 });
+    return new Response(JSON.stringify({ results: [{
+      title: 'ChatClaud Search release notes', url: 'https://example.org/release-notes',
+      content: 'A short search result snippet.'
+    }] }), { headers: { 'content-type': 'application/json' } });
+  }
+  if (target === 'https://google.serper.dev/search') {
+    if (upstreamMode === 'search-down' || upstreamMode === 'serper-down') return new Response('temporarily unavailable', { status: 503 });
+    return new Response(JSON.stringify({ organic: [{
+      title: 'ChatClaud Search via Serper', link: 'https://example.org/release-notes',
+      snippet: 'Fallback search result snippet.'
+    }] }), { headers: { 'content-type': 'application/json' } });
   }
   if (target === 'https://example.org/release-notes') {
     return new Response('<html><body><nav>Navigation ignored</nav><main><h1>Release notes</h1><p>Verified page text from the website.</p></main><script>ignoreThisScript()</script></body></html>', {
@@ -119,32 +125,40 @@ try {
     headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
     body: JSON.stringify({ messages: [{ role: 'user', content: 'Find the latest news today about ChatClaud Search' }] })
   }), {
-    ASSETS: assets, NVIDIA_API_KEY: 'test-only', SEARXNG_URL: 'https://search.example.com'
+    ASSETS: assets, NVIDIA_API_KEY: 'test-only', TAVILY_API_KEY: 'test-tavily', SERPER_API_KEY: 'test-serper'
   });
   assert.equal(response.status, 200);
   const searchStream = await response.text();
   assert.match(searchStream, /"type":"sources"/);
-  assert.match(searchStream, /"type":"search_diagnostics","ok":true/);
-  assert.match(searchStream, /"pagesRead":1/);
+  assert.match(searchStream, /"provider":"Tavily"/);
   assert.match(searchStream, /ChatClaud Search release notes/);
   assert.match(lastNvidiaBody.messages.map((m) => m.content).join('\n'), /Verified page text from the website/);
   assert.doesNotMatch(lastNvidiaBody.messages.map((m) => m.content).join('\n'), /Navigation ignored|ignoreThisScript/);
 
-  // Search-provider failure is visible and explicitly disclosed to Nemotron.
+  // Tavily failure automatically falls back to Serper.
+  upstreamMode = 'tavily-down';
+  response = await worker.fetch(new Request('https://ghost.example/api/chat', {
+    method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+    body: JSON.stringify({ messages: [{ role: 'user', content: 'Find the latest news today about ChatClaud Search' }] })
+  }), { ASSETS: assets, NVIDIA_API_KEY: 'test-only', TAVILY_API_KEY: 'test-tavily', SERPER_API_KEY: 'test-serper' });
+  assert.equal(response.status, 200);
+  const fallbackStream = await response.text();
+  assert.match(fallbackStream, /"provider":"Serper"/);
+  assert.match(fallbackStream, /"fallbackUsed":true/);
+  assert.match(fallbackStream, /"type":"sources"/);
+  assert.match(lastNvidiaBody.messages.map((m) => m.content).join('\n'), /Verified page text from the website/);
+
+  // If both providers fail, expose a clear failure status and do not fabricate live evidence.
   upstreamMode = 'search-down';
   response = await worker.fetch(new Request('https://ghost.example/api/chat', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+    method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
     body: JSON.stringify({ messages: [{ role: 'user', content: 'Find the latest news today about ChatClaud Search' }] })
-  }), {
-    ASSETS: assets, NVIDIA_API_KEY: 'test-only', SEARXNG_URL: 'https://search.example.com'
-  });
+  }), { ASSETS: assets, NVIDIA_API_KEY: 'test-only', TAVILY_API_KEY: 'test-tavily', SERPER_API_KEY: 'test-serper' });
   assert.equal(response.status, 200);
   const failedSearchStream = await response.text();
   assert.match(failedSearchStream, /"stage":"search_failed"/);
-  assert.match(failedSearchStream, /"type":"search_diagnostics","ok":false/);
-  assert.match(failedSearchStream, /SearXNG returned 503/);
-  assert.match(lastNvidiaBody.messages.map((m) => m.content).join('\n'), /automatic web search was attempted but failed/i);
+  assert.match(failedSearchStream, /"ok":false/);
+  assert.match(lastNvidiaBody.messages.map((m) => m.content).join('\n'), /automatic live web search failed/i);
   upstreamMode = 'ok';
 
   // The app-level rate limit returns the agreed busy contract with a 150-second retry delay.
@@ -190,10 +204,10 @@ try {
 }
 
 response = await worker.fetch(request('/api/health'), {
-  ASSETS: assets, NVIDIA_API_KEY: 'test-only', SEARXNG_URL: 'https://search.example.com'
+  ASSETS: assets, NVIDIA_API_KEY: 'test-only', TAVILY_API_KEY: 'test-tavily', SERPER_API_KEY: 'test-serper'
 });
 health = await response.json();
-assert.equal(health.preferredSearchConfigured, true);
+assert.equal(health.tavilyConfigured, true);
 
 response = await worker.fetch(request('/'), { ASSETS: assets });
 assert.equal(await response.text(), 'Ghost AI UI');

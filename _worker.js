@@ -121,13 +121,6 @@ function lastUserText(messages) {
 }
 
 
-const SEARXNG_INSTANCES_URL = "https://searx.space/data/instances.json";
-const SEARXNG_FALLBACKS = [
-  "https://www.isci.si/",
-  "https://shrt.win/",
-  "https://search.ctq.ro/",
-  "https://searxng.buffon.cloud/"
-];
 const MAX_SEARCH_RESULTS = 6;
 const MAX_PAGE_BYTES = 180 * 1024;
 const MAX_PAGE_TEXT = 8500;
@@ -155,131 +148,102 @@ function safePublicHttpsUrl(value) {
         /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host)) return null;
     url.hash = "";
     return url;
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 }
 
-async function fetchWithTimeout(url, options = {}, parentSignal, timeoutMs = 4500) {
+async function fetchWithTimeout(url, options = {}, parentSignal, timeoutMs = 8000) {
   const controller = new AbortController();
   const abortParent = () => controller.abort();
   if (parentSignal?.aborted) controller.abort();
   else parentSignal?.addEventListener("abort", abortParent, { once: true });
   const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await fetch(url, { ...options, signal: controller.signal });
-  } finally {
+  try { return await fetch(url, { ...options, signal: controller.signal }); }
+  finally {
     clearTimeout(timer);
     parentSignal?.removeEventListener("abort", abortParent);
   }
 }
 
-async function getSearxngCandidates(env, signal) {
-  const preferred = typeof env?.SEARXNG_URL === "string" ? env.SEARXNG_URL.trim() : "";
-  const candidates = [];
-  if (preferred) {
-    const url = safePublicHttpsUrl(preferred);
-    if (url) candidates.push(url.origin);
-  }
-  try {
-    const response = await fetchWithTimeout(SEARXNG_INSTANCES_URL, {
-      headers: { accept: "application/json" }
-    }, signal, 2500);
-    if (response.ok) {
-      const data = await response.json();
-      const instances = data?.instances && typeof data.instances === "object" ? data.instances : {};
-      const discovered = Object.entries(instances).map(([key, item]) => {
-        const base = item?.http?.url || item?.url || key;
-        const success = Number(item?.timing?.search?.success_percentage ?? 0);
-        const latency = Number(item?.timing?.search?.all ?? 99);
-        return { base, success, latency, status: Number(item?.http?.status_code ?? 200) };
-      }).filter((item) => item.status === 200 && item.success >= 40 && safePublicHttpsUrl(item.base));
-      discovered.sort((a, b) => b.success - a.success || a.latency - b.latency);
-      candidates.push(...discovered.slice(0, 12).map((item) => safePublicHttpsUrl(item.base).origin));
-    }
-  } catch {
-    // The official instance directory is optional; try the curated fallbacks below.
-  }
-  candidates.push(...SEARXNG_FALLBACKS);
-  return [...new Set(candidates)].slice(0, 12);
-}
-
-async function querySearxng(base, query, signal) {
-  const endpoint = new URL("/search", base);
-  endpoint.searchParams.set("q", query.slice(0, 500));
-  endpoint.searchParams.set("format", "json");
-  endpoint.searchParams.set("safesearch", "2");
-  endpoint.searchParams.set("language", "all");
-  const response = await fetchWithTimeout(endpoint.toString(), {
-    headers: {
-      accept: "application/json",
-      "accept-language": "en-US,en;q=0.9,de;q=0.8,ru;q=0.7",
-      "user-agent": "Mozilla/5.0 (compatible; ChatClaudSearch/1.0; +https://chatclaud.pages.dev)"
-    }
-  }, signal, 4500);
-  if (!response.ok) throw new Error(`SearXNG returned ${response.status}`);
-  const data = await response.json();
-  const rows = Array.isArray(data?.results) ? data.results : [];
+function normalizeSearchResults(rows, provider) {
   const results = [];
   const seen = new Set();
-  for (const row of rows) {
-    const url = safePublicHttpsUrl(row?.url);
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const url = safePublicHttpsUrl(provider === "Tavily" ? row?.url : row?.link);
     if (!url || seen.has(url.href)) continue;
     seen.add(url.href);
+    const snippet = provider === "Tavily"
+      ? (row?.content || row?.raw_content || "")
+      : (row?.snippet || row?.description || "");
     results.push({
-      title: String(row.title || url.hostname).replace(/\s+/g, " ").slice(0, 180),
+      title: String(row?.title || url.hostname).replace(/\s+/g, " ").slice(0, 180),
       url: url.href,
       domain: url.hostname,
-      snippet: String(row.content || row.snippet || "").replace(/\s+/g, " ").slice(0, 700)
+      snippet: String(snippet).replace(/\s+/g, " ").slice(0, 900)
     });
     if (results.length >= MAX_SEARCH_RESULTS) break;
   }
-  if (!results.length) throw new Error("SearXNG returned no usable results");
   return results;
 }
 
-async function searchPublicSearxng(query, env, signal) {
-  const candidates = await getSearxngCandidates(env, signal);
-  if (!candidates.length) {
-    return { results: [], diagnostics: {
-      provider: "SearXNG", ok: false, attempted: 0, failed: 0,
-      reason: "No valid public SearXNG instances were discovered."
-    }};
-  }
+async function searchTavily(query, apiKey, signal) {
+  const response = await fetchWithTimeout("https://api.tavily.com/search", {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json" },
+    body: JSON.stringify({
+      api_key: apiKey, query: query.slice(0, 500), search_depth: "advanced",
+      topic: "general", max_results: MAX_SEARCH_RESULTS,
+      include_answer: false, include_raw_content: false
+    })
+  }, signal, 9000);
+  if (!response.ok) throw new Error(`Tavily returned HTTP ${response.status}`);
+  const data = await response.json();
+  const results = normalizeSearchResults(data?.results, "Tavily");
+  if (!results.length) throw new Error("Tavily returned no usable results");
+  return results;
+}
 
-  const controllers = [];
-  const attempts = candidates.slice(0, 8).map((base) => {
-    const controller = new AbortController();
-    const abortParent = () => controller.abort();
-    if (signal?.aborted) controller.abort();
-    else signal?.addEventListener("abort", abortParent, { once: true });
-    controllers.push({ controller, signal, abortParent, base });
-    return querySearxng(base, query, controller.signal).then((results) => ({ base, results }))
-      .catch((error) => {
-        throw new Error(`${new URL(base).hostname}: ${String(error?.message || error).slice(0, 180)}`);
-      });
-  });
+async function searchSerper(query, apiKey, signal) {
+  const response = await fetchWithTimeout("https://google.serper.dev/search", {
+    method: "POST",
+    headers: { "content-type": "application/json", "X-API-KEY": apiKey, accept: "application/json" },
+    body: JSON.stringify({ q: query.slice(0, 500), num: MAX_SEARCH_RESULTS })
+  }, signal, 9000);
+  if (!response.ok) throw new Error(`Serper returned HTTP ${response.status}`);
+  const data = await response.json();
+  const results = normalizeSearchResults(data?.organic, "Serper");
+  if (!results.length) throw new Error("Serper returned no usable results");
+  return results;
+}
 
-  try {
-    const winner = await Promise.any(attempts);
-    return { results: winner.results, diagnostics: {
-      provider: "SearXNG", ok: true, instance: new URL(winner.base).hostname,
-      attempted: controllers.length
-    }};
-  } catch (error) {
-    const failures = Array.isArray(error?.errors) ? error.errors : [];
-    const details = failures.slice(0, 4).map((item) => String(item?.message || item).slice(0, 180));
-    return { results: [], diagnostics: {
-      provider: "SearXNG", ok: false, attempted: controllers.length,
-      failed: failures.length || controllers.length,
-      reason: details.length ? details.join("; ") : "All search instances failed or returned no usable results."
-    }};
-  } finally {
-    for (const item of controllers) {
-      item.signal?.removeEventListener("abort", item.abortParent);
-      item.controller.abort();
+async function searchWebProviders(query, env, signal) {
+  const tavilyKey = typeof env?.TAVILY_API_KEY === "string" ? env.TAVILY_API_KEY.trim() : "";
+  const serperKey = typeof env?.SERPER_API_KEY === "string" ? env.SERPER_API_KEY.trim() : "";
+  const failures = [];
+  let attempted = 0;
+  if (tavilyKey) {
+    attempted++;
+    try {
+      const results = await searchTavily(query, tavilyKey, signal);
+      return { results, diagnostics: { provider: "Tavily", ok: true, attempted, failed: 0, fallbackUsed: false } };
+    } catch (error) {
+      failures.push(String(error?.message || error).slice(0, 180));
+      console.warn("Tavily search failed:", failures[failures.length - 1]);
     }
   }
+  if (serperKey) {
+    attempted++;
+    try {
+      const results = await searchSerper(query, serperKey, signal);
+      return { results, diagnostics: { provider: "Serper", ok: true, attempted, failed: failures.length, fallbackUsed: Boolean(tavilyKey) } };
+    } catch (error) {
+      failures.push(String(error?.message || error).slice(0, 180));
+      console.warn("Serper search failed:", failures[failures.length - 1]);
+    }
+  }
+  const reason = !tavilyKey && !serperKey
+    ? "Search is not configured. Add TAVILY_API_KEY and/or SERPER_API_KEY in Cloudflare."
+    : failures.join("; ") || "No search provider returned usable results.";
+  return { results: [], diagnostics: { provider: "Tavily/Serper", ok: false, attempted, failed: failures.length, fallbackUsed: Boolean(tavilyKey && serperKey), reason } };
 }
 
 async function readBoundedBody(response, limit) {
@@ -377,13 +341,9 @@ async function readWebPage(value, signal) {
 }
 
 async function researchWeb(query, env, signal) {
-  const search = await searchPublicSearxng(query, env, signal);
+  const search = await searchWebProviders(query, env, signal);
   const results = search.results;
-  if (!results.length) {
-    return { results: [], context: "", diagnostics: {
-      ...search.diagnostics, pagesAttempted: 0, pagesRead: 0
-    }};
-  }
+  if (!results.length) return { results: [], context: "", diagnostics: { ...search.diagnostics, pagesAttempted: 0, pagesRead: 0 } };
   const pages = await Promise.all(results.slice(0, 3).map(async (item) => ({
     url: item.url, text: await readWebPage(item.url, signal)
   })));
@@ -397,11 +357,7 @@ async function researchWeb(query, env, signal) {
       pageText ? `Fetched page text: ${pageText}` : "Page text could not be fetched; use only the search snippet."
     ].join("\\n");
   }).join("\\n\\n").slice(0, 22000);
-  return { results, context, diagnostics: {
-    ...search.diagnostics,
-    pagesAttempted: Math.min(results.length, 3),
-    pagesRead: pageByUrl.size
-  }};
+  return { results, context, diagnostics: { ...search.diagnostics, pagesAttempted: Math.min(results.length, 3), pagesRead: pageByUrl.size } };
 }
 
 function withSystemIdentity(messages, webContext = "") {
@@ -418,11 +374,8 @@ function withSystemIdentity(messages, webContext = "") {
   return cloned;
 }
 
-function withSearchFailureNotice(messages, pagesFound) {
-  const note = pagesFound
-    ? "The automatic web search found search results, but the pages could not be read. Be transparent: cite no unsupported details, and explain that page access failed."
-    : "The automatic web search was attempted but failed. Be transparent: do not claim you searched successfully, do not invent current facts or URLs, and tell the user that live web search is temporarily unavailable.";
-  return [...messages, { role: "user", content: `[Internal search status for this turn: ${note}]` }];
+function withSearchFailureNotice(messages) {
+  return [...messages, { role: "user", content: "[Internal search status: the automatic live web search failed. Do not claim the search succeeded, do not invent current facts or URLs, and tell the user that live search is temporarily unavailable.]" }];
 }
 
 function streamChat(request, messages, env) {
@@ -454,48 +407,35 @@ function streamChat(request, messages, env) {
         let webSearchFailed = false;
         const userQuery = lastUserText(messages);
         if (shouldSearchWeb(userQuery)) {
-          send({ type: "status", stage: "searching", label: "Ищу в интернете…" });
+          send({ type: "status", stage: "searching", label: "Ищу в интернете (Tavily)…" });
           try {
             const research = await researchWeb(userQuery, env, aborter.signal);
             webContext = research.context;
             webSources = research.results;
             if (webSources.length) send({ type: "sources", items: webSources });
-            const diagnostics = research.diagnostics || {};
-            send({
-              type: "search_diagnostics",
-              ok: Boolean(diagnostics.ok),
-              provider: diagnostics.provider || "SearXNG",
-              attempted: diagnostics.attempted || 0,
-              failed: diagnostics.failed || 0,
-              results: webSources.length,
-              pagesAttempted: diagnostics.pagesAttempted || 0,
-              pagesRead: diagnostics.pagesRead || 0,
-              instance: diagnostics.instance || null,
-              reason: diagnostics.ok ? null : (diagnostics.reason || "Поисковые серверы не ответили.")
-            });
+            const d = research.diagnostics || {};
+            send({ type: "search_diagnostics", ok: Boolean(d.ok), provider: d.provider || "Tavily/Serper",
+              attempted: d.attempted || 0, failed: d.failed || 0, fallbackUsed: Boolean(d.fallbackUsed),
+              results: webSources.length, pagesAttempted: d.pagesAttempted || 0, pagesRead: d.pagesRead || 0,
+              reason: d.ok ? null : (d.reason || "Поисковые провайдеры не ответили.") });
             if (!webSources.length) {
               webSearchFailed = true;
               send({ type: "status", stage: "search_failed", label: "Поиск временно недоступен — отвечу без актуальных данных." });
             } else if (!webContext) {
-              webSearchFailed = true;
-              send({ type: "status", stage: "pages_unavailable", label: "Результаты найдены, но сайты не удалось прочитать." });
+              send({ type: "status", stage: "pages_unavailable", label: "Результаты найдены, но страницы не удалось прочитать." });
             }
           } catch (error) {
             webSearchFailed = true;
             console.warn("Web research unavailable:", error?.message || error);
-            send({
-              type: "search_diagnostics", ok: false, provider: "SearXNG",
-              attempted: 0, failed: 0, results: 0, pagesAttempted: 0, pagesRead: 0,
-              reason: String(error?.message || error).slice(0, 240)
-            });
+            send({ type: "search_diagnostics", ok: false, provider: "Tavily/Serper", attempted: 0,
+              failed: 0, fallbackUsed: false, results: 0, pagesAttempted: 0, pagesRead: 0,
+              reason: String(error?.message || error).slice(0, 240) });
             send({ type: "status", stage: "search_failed", label: "Поиск временно недоступен — отвечу без актуальных данных." });
           }
         }
         if (aborter.signal.aborted) return;
         send({ type: "status", stage: "answer", label: "Формулирую ответ…" });
-        const effectiveMessages = webSearchFailed
-          ? withSearchFailureNotice(messages, webSources.length > 0)
-          : messages;
+        const effectiveMessages = webSearchFailed ? withSearchFailureNotice(messages) : messages;
 
         const upstream = await fetch(NVIDIA_URL, {
           method: "POST",
@@ -652,8 +592,12 @@ export default {
         model: MODEL,
         nvidiaConfigured: Boolean(getNvidiaApiKey(env)),
         firebaseConfigured: Boolean(getFirebaseProjectId(env)),
-        searchEnabled: true,
-        preferredSearchConfigured: Boolean(typeof env?.SEARXNG_URL === "string" && env.SEARXNG_URL.trim())
+        searchEnabled: Boolean(
+          (typeof env?.TAVILY_API_KEY === "string" && env.TAVILY_API_KEY.trim()) ||
+          (typeof env?.SERPER_API_KEY === "string" && env.SERPER_API_KEY.trim())
+        ),
+        tavilyConfigured: Boolean(typeof env?.TAVILY_API_KEY === "string" && env.TAVILY_API_KEY.trim()),
+        serperConfigured: Boolean(typeof env?.SERPER_API_KEY === "string" && env.SERPER_API_KEY.trim())
       });
     }
     if (url.pathname === "/api/chat" && request.method === "POST") return handleChat(request, env);
